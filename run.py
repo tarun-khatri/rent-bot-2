@@ -41,9 +41,17 @@ def main():
     
     # Debug: Log all environment variables
     logger.info("🔍 Debug: Available environment variables:")
+    logger.info(f"Total env vars: {len(os.environ)}")
+    
+    # Show ALL environment variables (not just our specific ones)
     for key, value in os.environ.items():
-        if any(keyword in key.upper() for keyword in ['ACCESS', 'APP', 'PHONE', 'VERIFY', 'SUPABASE', 'GEMINI']):
-            logger.info(f"  {key}: {'*' * min(len(value), 10)}...")
+        logger.info(f"  {key}: {value[:20]}...")
+    
+    # Check specific variables
+    logger.info("🔍 Checking specific variables:")
+    for var in ['ACCESS_TOKEN', 'APP_SECRET', 'PHONE_NUMBER_ID', 'VERIFY_TOKEN', 'SUPABASE_URL', 'SUPABASE_KEY', 'GEMINI_API_KEY']:
+        value = os.getenv(var)
+        logger.info(f"  {var}: {'Found' if value else 'NOT FOUND'}")
     
     # Create Flask application
     try:
