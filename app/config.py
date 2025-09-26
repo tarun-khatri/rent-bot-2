@@ -58,6 +58,16 @@ def _validate_critical_config(config):
         "SUPABASE_URL", "SUPABASE_KEY", "GEMINI_API_KEY"
     ]
     
+    # Debug: Log all environment variables
+    import os
+    logging.info("🔍 Debug: Checking environment variables...")
+    for var in critical_vars:
+        value = os.getenv(var)
+        if value:
+            logging.info(f"✅ {var}: {'*' * min(len(value), 10)}...")
+        else:
+            logging.info(f"❌ {var}: Not found")
+    
     missing_vars = []
     for var in critical_vars:
         if not config.get(var):

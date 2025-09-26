@@ -39,6 +39,12 @@ def main():
     else:
         logger.info("🚀 Production environment detected - skipping startup checks")
     
+    # Debug: Log all environment variables
+    logger.info("🔍 Debug: Available environment variables:")
+    for key, value in os.environ.items():
+        if any(keyword in key.upper() for keyword in ['ACCESS', 'APP', 'PHONE', 'VERIFY', 'SUPABASE', 'GEMINI']):
+            logger.info(f"  {key}: {'*' * min(len(value), 10)}...")
+    
     # Create Flask application
     try:
         app = create_app()
