@@ -21,12 +21,45 @@ webhook_blueprint = Blueprint("webhook", __name__)
 def health_check():
     """Health check endpoint for Railway and Docker"""
     try:
-        # Basic health check - can be expanded to check database, etc.
-        return jsonify({
+        # Check if the app has been running for at least 10 seconds
+        # This prevents Railway from failing health checks during startup
+        import time
+        startup_time = getattr(health_check, '_startup_time', None)
+        if startup_time is None:
+            health_check._startup_time = time.time()
+            startup_time = health_check._startup_time
+        
+        current_time = time.time()
+        if current_time - startup_time < 10:
+            # App is still starting up, return 503 (Service Unavailable)
+            return jsonify({
+                "status": "starting",
+                "message": "Application is starting up, please wait...",
+                "timestamp": datetime.now().isoformat(),
+                "service": "whatsapp-bot"
+            }), 503
+        
+        # App has been running for at least 10 seconds, do full health check
+        health_data = {
             "status": "healthy",
             "timestamp": datetime.now().isoformat(),
-            "service": "whatsapp-bot"
-        }), 200
+            "service": "whatsapp-bot",
+            "uptime_seconds": int(current_time - startup_time)
+        }
+        
+        # Optional: Check database connection
+        try:
+            from app.services.database_service import db_service
+            # Simple database connectivity test
+            db_service._initialize_client()
+            health_data["database"] = "connected"
+        except Exception as db_error:
+            logger.warning(f"Database health check failed: {db_error}")
+            health_data["database"] = "disconnected"
+            # Don't fail the health check for database issues during startup
+        
+        return jsonify(health_data), 200
+        
     except Exception as e:
         logger.error(f"Health check failed: {e}")
         return jsonify({

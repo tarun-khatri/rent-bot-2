@@ -45,6 +45,11 @@ def main():
     
     logger.info(f"Starting server on {host}:{port} (debug={debug})")
     
+    # Add a small delay to ensure all services are ready
+    import time
+    logger.info("Waiting 5 seconds for all services to initialize...")
+    time.sleep(5)
+    
     # Start the application
     try:
         app.run(host=host, port=port, debug=debug)
