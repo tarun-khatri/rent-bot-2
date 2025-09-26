@@ -16,7 +16,7 @@ def main():
     """Main application entry point"""
     logger.info("🏠 Starting Real Estate Leasing Bot...")
     
-    # Run startup checks if not in production
+    # Run startup checks if not in production (skip for Railway deployment)
     if not os.getenv('SKIP_STARTUP_CHECK', '').lower() == 'true':
         logger.info("Running startup checks...")
         try:

@@ -17,6 +17,25 @@ logger = logging.getLogger(__name__)
 webhook_blueprint = Blueprint("webhook", __name__)
 
 
+@webhook_blueprint.route("/health", methods=["GET"])
+def health_check():
+    """Health check endpoint for Railway and Docker"""
+    try:
+        # Basic health check - can be expanded to check database, etc.
+        return jsonify({
+            "status": "healthy",
+            "timestamp": datetime.now().isoformat(),
+            "service": "whatsapp-bot"
+        }), 200
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return jsonify({
+            "status": "unhealthy",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }), 500
+
+
 def handle_message():
     """
     Handle incoming webhook events from the WhatsApp API.

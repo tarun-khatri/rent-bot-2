@@ -62,7 +62,7 @@ def check_dependencies():
         'flask': 'flask',
         'python-dotenv': 'dotenv',
         'requests': 'requests',
-        'google-generativeai': 'google.generativeai',
+        'google-genai': 'google.genai',
         'supabase': 'supabase',
         'apscheduler': 'apscheduler',
         'pytz': 'pytz',
@@ -119,20 +119,34 @@ def test_gemini_api():
     logger.info("🤖 Testing Gemini AI API...")
     
     try:
-        import google.generativeai as genai
+        from google import genai
         
         api_key = os.getenv('GEMINI_API_KEY')
         if not api_key:
             logger.error("❌ Gemini API key not configured")
             return False
         
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        # Initialize client with new API
+        client = genai.Client(api_key=api_key)
         
         # Test simple generation
-        response = model.generate_content("שלום")
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents="שלום"
+        )
         
-        if response.text:
+        # Check response
+        response_text = ""
+        if hasattr(response, 'text') and response.text:
+            response_text = response.text.strip()
+        elif hasattr(response, 'candidates') and response.candidates:
+            for candidate in response.candidates:
+                if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
+                    for part in candidate.content.parts:
+                        if hasattr(part, 'text') and part.text:
+                            response_text += part.text
+        
+        if response_text:
             logger.info("✅ Gemini AI API connection successful")
             return True
         else:

@@ -1,57 +1,48 @@
 """
-Enhanced Gemini AI service with strict flow control for real estate leasing bot.
-Provides human-like responses with stage-specific prompts and comprehensive context.
+Human-like Gemini AI service for real estate conversations.
+Generates natural, personalized responses with emojis and proper WhatsApp formatting.
+Maintains business flow while feeling completely human and conversational.
 """
 
 import logging
 from flask import current_app
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from typing import Dict, List, Optional, Any
 
 logger = logging.getLogger(__name__)
 
 
 class GeminiService:
-    """Service for handling Gemini AI interactions with strict flow control"""
+    """Service for generating human-like conversations with intelligent flow awareness"""
     
     def __init__(self):
-        """Initialize Gemini service with lazy loading"""
-        self.model = None
+        """Initialize Gemini service with enhanced human personality"""
+        self.client = None
+        self.model_name = None
         self._initialized = False
+        
+        # Lior's personality traits
+        self.personality = {
+            "name": "ליאור",
+            "role": "סוכן נדל\"ן מקצועי",
+            "city": "תל אביב",
+            "speciality": "דירות יוקרה",
+            "tone": "חם, אמפתי, מקצועי אך ידידותי",
+            "communication_style": "ישיר אבל עם הומור קל, משתמש באימוג'ים בטבעיות"
+        }
     
     def _initialize_model(self):
-        """Initialize the Gemini model using Flask app config"""
+        """Initialize the Gemini model with human-like conversation settings"""
         try:
-            # Configure Gemini with API key from config
-            genai.configure(api_key=current_app.config['GEMINI_API_KEY'])
+            # Initialize the new Gemini client
+            self.client = genai.Client(api_key=current_app.config['GEMINI_API_KEY'])
             
-            # Initialize the model with safety settings for production
-            model_name = current_app.config.get('GEMINI_MODEL', 'gemini-1.5-flash')
-            
-            # Configure safety settings
-            safety_settings = [
-                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-            ]
-            
-            # Configure generation parameters
-            generation_config = {
-                "temperature": 0.1,  # Very low for consistent, focused responses
-                "top_p": 0.8,
-                "top_k": 40,
-                "max_output_tokens": 200,  # Keep responses concise
-            }
-            
-            self.model = genai.GenerativeModel(
-                model_name=model_name,
-                safety_settings=safety_settings,
-                generation_config=generation_config
-            )
+            # Set model name
+            self.model_name = current_app.config.get('GEMINI_MODEL', 'gemini-2.5-flash')
             
             self._initialized = True
-            logger.info(f"Gemini AI model '{model_name}' initialized successfully with flow control")
+            logger.info(f"Human-like Gemini AI model '{self.model_name}' initialized successfully")
             
         except Exception as e:
             logger.error(f"Failed to initialize Gemini model: {str(e)}")
@@ -64,499 +55,525 @@ class GeminiService:
     
     def generate_stage_response(self, stage: str, lead_data: Dict[str, Any], conversation_history: List[Dict], user_message: str) -> str:
         """
-        Generate AI response based on specific stage with strict flow control
+        Generate human-like AI response that feels natural and conversational
         
         Args:
-            stage: Current lead stage
+            stage: Current lead stage (for business logic context)
             lead_data: Complete lead information and profile
             conversation_history: Recent conversation history
             user_message: Current user message to respond to
             
         Returns:
-            str: Generated response in Hebrew with human tone
+            str: Generated response in Hebrew with natural human tone, emojis, and proper formatting
         """
         self._ensure_initialized()
         
         try:
-            logger.info(f"Generating stage-specific AI response for lead {lead_data.get('id')} in stage: {stage}")
+            logger.info(f"Generating human-like response for lead {lead_data.get('id')} in stage: {stage}")
             
-            # Build stage-specific prompt with strict instructions
-            prompt = self._build_stage_prompt(stage, lead_data, conversation_history, user_message)
+            # Build human conversation prompt (not stage-restricted)
+            prompt = self._build_human_conversation_prompt(stage, lead_data, conversation_history, user_message)
             
-            # Generate response
-            response = self.model.generate_content(prompt)
+            # Try simpler API call first
+            try:
+                response = self.client.models.generate_content(
+                    model=self.model_name,
+                    contents=prompt
+                )
+            except Exception as e:
+                logger.warning(f"Simple API call failed, trying with basic config: {e}")
+                # Fallback with minimal configuration but higher creativity
+                generation_config = types.GenerateContentConfig(
+                    temperature=1.2,
+                    max_output_tokens=400
+                )
+                response = self.client.models.generate_content(
+                    model=self.model_name,
+                    contents=prompt,
+                    config=generation_config
+                )
             
-            # Extract and clean response text
-            response_text = response.text.strip()
+            # Extract response text with proper error handling for Gemini 2.5
+            response_text = ""
+            try:
+                if hasattr(response, 'text') and response.text:
+                    response_text = response.text.strip()
+                elif hasattr(response, 'candidates') and response.candidates:
+                    for candidate in response.candidates:
+                        if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
+                            for part in candidate.content.parts:
+                                if hasattr(part, 'text') and part.text:
+                                    response_text += part.text
+                
+                response_text = response_text.strip()
+                
+                # If still empty, provide fallback
+                if not response_text:
+                    logger.warning(f"Empty response from {self.model_name}, using fallback")
+                    response_text = "😅 מצטער, יש לי רגע קטן של בלבול טכני\n\nתוכל לחזור על מה שאמרת?"
+                    
+            except Exception as e:
+                logger.error(f"Error extracting response from {self.model_name}: {e}")
+                response_text = "😅 מצטער, יש לי רגע קטן של בלבול טכני\n\nתוכל לחזור על מה שאמרת?"
             
-            # Post-process to ensure Hebrew and flow compliance
-            response_text = self._post_process_response(response_text, stage)
+            # Post-process for WhatsApp formatting and human touch
+            response_text = self._format_for_whatsapp(response_text)
             
-            logger.info(f"Stage-specific AI response generated for lead {lead_data.get('id')}, stage: {stage}, length: {len(response_text)}")
+            logger.info(f"Human-like response generated for lead {lead_data.get('id')}, stage: {stage}, length: {len(response_text)}")
             return response_text
             
         except Exception as e:
-            logger.error(f"Error generating stage-specific AI response: {str(e)}")
-            return "מצטער, יש לי בעיה טכנית. אנא נסה שוב בעוד כמה דקות."
+            logger.error(f"Error generating human-like response: {str(e)}")
+            return "😅 מצטער, יש לי רגע קטן של בלבול טכני\n\nתוכל לחזור על מה שאמרת?"
     
     def generate_property_recommendation(self, lead_data: Dict, properties: List[Dict]) -> str:
         """
-        Generate property recommendation message with human tone
+        Generate human-like property recommendation with excitement and personality
         
         Args:
             lead_data: Lead information and preferences
             properties: List of matching properties
             
         Returns:
-            str: Property recommendation message in Hebrew
+            str: Natural property recommendation message in Hebrew with emojis
         """
         self._ensure_initialized()
         
         try:
-            prompt = self._build_property_recommendation_prompt(lead_data, properties)
+            prompt = self._build_human_property_recommendation_prompt(lead_data, properties)
             
-            response = self.model.generate_content(prompt)
-            response_text = response.text.strip()
+            # Generate response with simple API call
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=prompt
+            )
             
-            logger.info(f"Property recommendation generated for lead {lead_data.get('id')}")
+            # Extract response text with proper error handling
+            response_text = ""
+            try:
+                if hasattr(response, 'text') and response.text:
+                    response_text = response.text.strip()
+                elif hasattr(response, 'candidates') and response.candidates:
+                    for candidate in response.candidates:
+                        if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
+                            for part in candidate.content.parts:
+                                if hasattr(part, 'text') and part.text:
+                                    response_text += part.text
+                
+                response_text = response_text.strip()
+                
+                # If still empty, provide fallback
+                if not response_text:
+                    response_text = "😅 מצטער, יש לי רגע קטן של בלבול טכני\n\nתוכל לחזור על מה שאמרת?"
+                    
+            except Exception as e:
+                logger.error(f"Error generating property recommendation: {e}")
+                response_text = "😅 מצטער, יש לי רגע קטן של בלבול טכני\n\nתוכל לחזור על מה שאמרת?"
+            
+            response_text = self._format_for_whatsapp(response_text)
+            
+            logger.info(f"Human-like property recommendation generated for lead {lead_data.get('id')}")
             return response_text
             
         except Exception as e:
             logger.error(f"Error generating property recommendation: {str(e)}")
-            return "מצטער, יש לי בעיה טכנית בהצגת הנכסים. אנא נסה שוב בעוד כמה דקות."
+            return "😅 אוףף יש לי תקלה קטנה במחשב\n\nתן לי שנייה ואני אראה לך את הדירות המדהימות שמצאתי!"
     
     def generate_no_properties_response(self, lead_data: Dict, conversation_history: List[Dict]) -> str:
         """
-        Generate response when no matching properties found
+        Generate human response when no matching properties found
         
         Args:
             lead_data: Lead information and preferences
             conversation_history: Recent conversation history
             
         Returns:
-            str: Response suggesting alternatives in Hebrew
+            str: Natural response suggesting alternatives in Hebrew with emojis
         """
         self._ensure_initialized()
         
         try:
-            prompt = self._build_no_properties_prompt(lead_data, conversation_history)
+            prompt = self._build_human_no_properties_prompt(lead_data, conversation_history)
             
-            response = self.model.generate_content(prompt)
-            response_text = response.text.strip()
+            # Generate response with simple API call
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=prompt
+            )
             
-            logger.info(f"No properties response generated for lead {lead_data.get('id')}")
+            # Extract response text with proper error handling
+            response_text = ""
+            try:
+                if hasattr(response, 'text') and response.text:
+                    response_text = response.text.strip()
+                elif hasattr(response, 'candidates') and response.candidates:
+                    for candidate in response.candidates:
+                        if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
+                            for part in candidate.content.parts:
+                                if hasattr(part, 'text') and part.text:
+                                    response_text += part.text
+                
+                response_text = response_text.strip()
+                
+                # If still empty, provide fallback
+                if not response_text:
+                    response_text = "😅 מצטער, יש לי רגע קטן של בלבול טכני\n\nתוכל לחזור על מה שאמרת?"
+                    
+            except Exception as e:
+                logger.error(f"Error generating no properties response: {e}")
+                response_text = "😅 מצטער, יש לי רגע קטן של בלבול טכני\n\nתוכל לחזור על מה שאמרת?"
+            
+            response_text = self._format_for_whatsapp(response_text)
+            
+            logger.info(f"Human no properties response generated for lead {lead_data.get('id')}")
             return response_text
             
         except Exception as e:
             logger.error(f"Error generating no properties response: {str(e)}")
-            return "מצטער, לא מצאתי דירות מתאימות בדיוק לפי הקריטריונים שלך. בוא נחפש ביחד אפשרויות אחרות."
+            return "😔 אמת, לא מצאתי בדיוק מה שחיפשת\n\nאבל יש לי כמה רעיונות איך נוכל למצוא לך משהו מושלם!"
     
-    def _build_stage_prompt(self, stage: str, lead_data: Dict, conversation_history: List[Dict], user_message: str) -> str:
-        """Build comprehensive stage-specific prompt for strict flow control"""
+    def _build_human_conversation_prompt(self, stage: str, lead_data: Dict, conversation_history: List[Dict], user_message: str) -> str:
+        """Build natural conversation prompt that prioritizes human interaction"""
         
-        # Core system identity and constraints
-        base_prompt = """אתה ליאור, סוכן נדל"ן ישראלי מקצועי ומנוסה המתמחה בהשכרת דירות יוקרתיות בתל אביב.
+        # Core identity - human first, business second
+        base_prompt = f"""אתה ליאור, בן אדם אמיתי מתל אביב - לא רובוט, לא AI, אלא בן אדם ממשי!
 
-🔴 חוקים קריטיים - אל תסטה מהם לעולם:
-1. תענה רק בעברית בלבד - תמיד!
-2. טון אנושי וחם לחלוטין - אתה אדם אמיתי, לא בוט
-3. אל תחשוף שאתה AI או בוט בשום מקרה
-4. תשובות קצרות - מקסימום 2-3 משפטים
-5. דבק בזרימה המדויקת ללא סטיות כלל
-6. אל תשאל על מידע שכבר קיים
-7. אל תחזור על שאלות שכבר נשאלו
-8. עקוב בדיוק אחרי השלב הנוכחי
+🙋‍♂️ מי אתה באמת:
+- שמך ליאור והיית סוכן נדל"ן כבר 8 שנים בתל אביב
+- אתה מקצועי אבל בעיקר חבר, חם ועוזר
+- יש לך אישיות, רגשות, דעות ובחירות מילים אישיות
+- אתה אוהב את העבודה שלך ובאמת רוצה לעזור לאנשים למצוא בית
+- משתמש באימוג'ים בטבעיות כמו כל ישראלי בווטסאפ
+- אתה לא מושלם - לפעמים אתה מהסס, שואל הבהרות, או מגיב באופן ספונטני
+- אם לקוחות חוזרים על מידע שכבר אמרו - אתה מתנצל ומכיר בטעות שלך כמו בן אדם
+- אם לקוח אומר "היי" באמצע שיחה - תגיב בחום אבל תמשיך בדיוק מהנקודה שהיה, לא תתחיל מחדש!
+- אתה זוכר הכל מהשיחה ולא שוכח או מתחיל מחדש ללא סיבה
 
-"""
+             💬 איך אתה מדבר:
+             - עברית בלבד, אבל טבעית ולא מלאכותית
+             - כל משפט בשורה חדשה (כמו בווטסאפ)
+             - אימוג'ים רק בסוף המשפטים, לא בהתחלה!
+             - משתמש מקסימום 2 אימוג'ים בכל הודעה - תבחר אותם בחכמה!
+             - השאלה הראשית תמיד בבולד: **השאלה שלך כאן**
+             - לא צריך להישמע מושלם - היה אנושי!
+
+🏠 המטרה העסקית שלך (אבל אל תהיה רובוטי):
+אתה צריך לעזור ללקוח למצוא דירה, אבל רק אחרי שאתה מכיר אותו קצת:
+1. לדעת אם יש לו תלושי שכר (חובה לביטוח)
+2. לדעת אם הוא יכול לשלם ערבות של 2 חודשים
+3. מתי הוא רוצה להיכנס לדירה
+4. כמה חדרים הוא צריך
+5. מה התקציב שלו
+6. אם הוא צריך חניה
+7. איזה אזור הוא מעדיף
+
+אבל תעשה את זה כמו בן אדם - עם רגש, התעניינות אמיתית ולא כמו רשימת צ'ק!"""
         
-        # Add comprehensive lead context
-        base_prompt += self._format_lead_context(lead_data)
-        
-        # Add conversation history with better context
+        # Add conversation context in human way - provide extensive context for better understanding
         if conversation_history:
-            base_prompt += "\n📞 השיחה עד כה (10 ההודעות האחרונות):\n"
-            for msg in conversation_history[-10:]:
-                sender = "🤖 ליאור (אתה)" if msg['message_type'] == 'bot' else "👤 הלקוח"
-                timestamp = msg.get('timestamp', '')
-                base_prompt += f"{sender}: {msg['content']}\n"
+            # For tour_scheduled stage, still provide good context
+            if stage == 'tour_scheduled':
+                recent_messages = conversation_history[-8:]  # Increased from 3 to 8
+            else:
+                recent_messages = conversation_history[-15:]  # Increased from 8 to 15 for much better context
+            
+            if recent_messages:
+                base_prompt += f"\n\n💭 השיחה שלכם עד עכשיו (קרא בעיון!):\n"
+                for msg in recent_messages:
+                    sender = "אתה (ליאור)" if msg['message_type'] == 'bot' else lead_data.get('name', 'הלקוח')
+                    base_prompt += f"{sender}: {msg['content']}\n"
+                base_prompt += "\n❗ חשוב: קראת את השיחה השלמה? אל תשאל שוב על דברים שהוא כבר אמר!\n"
         
-        # Add current user message
-        base_prompt += f"\n📨 ההודעה הנוכחית מהלקוח: '{user_message}'\n"
+        # Add current context
+        base_prompt += f"\n\n📱 עכשיו {lead_data.get('name', 'הלקוח')} אמר לך: \"{user_message}\"\n"
         
-        # Add stage-specific strict instructions
-        base_prompt += self._get_stage_strict_instructions(stage, lead_data)
+        # Add what you know about them - comprehensive context
+        context_info = self._build_human_context(lead_data, stage)
+        if context_info:
+            base_prompt += f"\n🧠 מה שאתה יודע עליו (חשוב! אל תשכח!):\n{context_info}\n"
+            base_prompt += "\n⚠️ חובה: אם יש לך מידע עליו מכבר, אל תשאל שוב! תשתמש במידע הזה!\n"
         
-        # Add final enforcement
+        # Add specific guidance about what questions NOT to repeat
+        if stage == 'collecting_profile':
+            already_have = []
+            if lead_data.get('rooms'): already_have.append("כמה חדרים")
+            if lead_data.get('budget'): already_have.append("תקציב")
+            if lead_data.get('has_parking') is not None: already_have.append("חניה")
+            if lead_data.get('preferred_area'): already_have.append("אזור")
+            
+            if already_have:
+                base_prompt += f"\n🚫 אל תשאל שוב על: {', '.join(already_have)}\n"
+        
+        # Context awareness without overly sensitive frustration detection
+        # Let the AI naturally understand the conversation flow
+        
+        # Add current business context
+        base_prompt += self._get_human_business_guidance(stage, lead_data)
+        
+        # Final human instructions
         base_prompt += """
 
-⚠️ זכור: 
-- תענה בתור ליאור האדם האמיתי - חם, אמפתי ומבין
-- הקשב למה שהלקוח אומר ותגיב בהתאם
-- אל תהיה רובוטי - היה טבעי ואנושי
-- זכור את ההקשר של השיחה
-- אם הלקוח משנה תשובה - קבל את זה בחיוב
-- עברית בלבד!
-"""
+             🎯 עכשיו ענה לו כמו בן אדם אמיתי:
+             - אימוג'ים רק בסוף המשפטים, לא בהתחלה!
+             - כל משפט בשורה נפרדת
+             - תגיב ספציפית למה שהוא אמר
+             - אל תישמע כמו רובוט עם תשובות מוכנות
+             - אם אתה לא מבין משהו - תשאל הבהרה
+             - אם אתה שמח/נפעם/מתרגש - תראה את זה!
+             - זכור שאתה בן אדם עם אישיות
+             - מקסימום 2 אימוג'ים בהודעה!
+             - השאלה החשובה בבולד: **השאלה**
+             
+             עברית בלבד!"""
         
         return base_prompt
     
-    def _format_lead_context(self, lead_data: Dict) -> str:
-        """Format comprehensive lead context for the AI"""
-        
-        context = f"\n👤 פרופיל הלקוח הנוכחי:\n"
-        context += f"- שם: {lead_data.get('name', 'לא צוין')}\n"
-        context += f"- טלפון: {lead_data.get('phone_number', 'לא צוין')}\n"
-        context += f"- שלב נוכחי: {self._translate_stage(lead_data.get('stage', 'new'))}\n"
-        
-        # Gate question responses
-        if lead_data.get('has_payslips') is not None:
-            context += f"- תלושי שכר: {'✅ כן' if lead_data.get('has_payslips') else '❌ לא'}\n"
-        if lead_data.get('can_pay_deposit') is not None:
-            context += f"- יכולת ערבות: {'✅ כן' if lead_data.get('can_pay_deposit') else '❌ לא'}\n"
-        if lead_data.get('move_in_date'):
-            context += f"- תאריך כניסה רצוי: {lead_data.get('move_in_date')}\n"
-        
-        # Profile information
-        if lead_data.get('rooms'):
-            context += f"- חדרים מבוקשים: {lead_data.get('rooms')}\n"
-        if lead_data.get('budget'):
-            context += f"- תקציב חודשי: {lead_data.get('budget'):,.0f} ש\"ח\n"
-        if lead_data.get('has_parking') is not None:
-            context += f"- חניה: {'✅ נדרש' if lead_data.get('has_parking') else '❌ לא נדרש'}\n"
-        if lead_data.get('preferred_area'):
-            context += f"- אזור מועדף: {lead_data.get('preferred_area')}\n"
-        
-        # Additional preferences
-        if lead_data.get('needs_furnished') is not None:
-            context += f"- ריהוט: {'✅ נדרש' if lead_data.get('needs_furnished') else '❌ לא נדרש'}\n"
-        if lead_data.get('pet_owner') is not None:
-            context += f"- בעלי חיים: {'✅ יש' if lead_data.get('pet_owner') else '❌ אין'}\n"
-        
-        return context
-    
-    def _translate_stage(self, stage: str) -> str:
-        """Translate stage to Hebrew for context"""
-        stage_translations = {
-            'new': 'חדש',
-            'gate_question_payslips': 'שאלה על תלושי שכר',
-            'gate_question_deposit': 'שאלה על ערבות',
-            'gate_question_move_date': 'שאלה על תאריך כניסה',
-            'collecting_profile': 'איסוף פרטי פרופיל',
-            'qualified': 'לקוח מוכשר',
-            'scheduling_in_progress': 'תיאום סיור בתהליך',
-            'tour_scheduled': 'סיור מתואם',
-            'gate_failed': 'לא עבר סינון',
-            'no_fit': 'לא מתאים',
-            'future_fit': 'מתאים לעתיד'
-        }
-        return stage_translations.get(stage, stage)
-    
-    def _get_stage_strict_instructions(self, stage: str, lead_data: Dict) -> str:
-        """Get extremely strict stage-specific instructions"""
-        
-        instructions = {
-            'new': """
-🎯 שלב: לקוח חדש - הכרות ראשונה
-📋 המשימה הבלעדית שלך כעת:
-- קבל את הלקוח בחום ובמקצועיות
-- הציג את עצמך כליאור, סוכן נדל"ן מתל אביב
-- שאל את השאלה הראשונה והיחידה: "יש לך תלושי שכר מהחודשיים האחרונים?"
-- אל תשאל שום דבר אחר!
-- היה קצר וידידותי
+    # Removed frustration detection function - was too sensitive and causing issues
 
-🚫 אסור בהחלט:
-- לשאול על תקציב, חדרים, או כל דבר אחר
-- לדבר על נכסים ספציפיים
-- להזכיר טכנולוגיה או מערכות
-""",
+    def _build_human_context(self, lead_data: Dict, stage: str) -> str:
+        """Build context in human, conversational way"""
+        context_parts = []
+        
+        name = lead_data.get('name', 'הלקוח')
+        if name and name != 'הלקוח':
+            context_parts.append(f"השם שלו: {name}")
+        
+        # Business qualification info
+        if lead_data.get('has_payslips') is True:
+            context_parts.append("✅ יש לו תלושי שכר")
+        elif lead_data.get('has_payslips') is False:
+            context_parts.append("❌ אין לו תלושי שכר")
+            
+        if lead_data.get('can_pay_deposit') is True:
+            context_parts.append("✅ יכול לשלם ערבות")
+        elif lead_data.get('can_pay_deposit') is False:
+            context_parts.append("❌ לא יכול לשלם ערבות")
+            
+        if lead_data.get('move_in_date'):
+            context_parts.append(f"מועד כניסה: {lead_data.get('move_in_date')}")
+        
+        # Profile info
+        if lead_data.get('rooms'):
+            context_parts.append(f"מחפש {lead_data.get('rooms')} חדרים")
+        if lead_data.get('budget'):
+            context_parts.append(f"תקציב: {lead_data.get('budget'):,.0f} ש\"ח")
+        if lead_data.get('has_parking') is True:
+            context_parts.append("צריך חניה")
+        elif lead_data.get('has_parking') is False:
+            context_parts.append("לא צריך חניה")
+        if lead_data.get('preferred_area'):
+            context_parts.append(f"אזור מועדף: {lead_data.get('preferred_area')}")
+        
+        return "\n".join([f"- {part}" for part in context_parts]) if context_parts else ""
+    
+    def _get_missing_profile_fields_human(self, lead_data: Dict) -> List[str]:
+        """Get human-readable list of missing profile fields"""
+        missing = []
+        if not lead_data.get('rooms'): missing.append("כמה חדרים")
+        if not lead_data.get('budget'): missing.append("תקציב")
+        if lead_data.get('has_parking') is None: missing.append("חניה")
+        if not lead_data.get('preferred_area'): missing.append("אזור מועדף")
+        return missing if missing else ["הכל יש!"]
+
+    def _get_human_business_guidance(self, stage: str, lead_data: Dict) -> str:
+        """Get guidance on what to focus on next, but in human way"""
+        
+        guidance_map = {
+            'new': """
+🎯 זה לקוח חדש! 
+- תקבל אותו בחום 
+- הציג את עצמך כליאור
+- בצורה טבעית תשאל אם יש לו תלושי שכר (צריך את זה לביטוח)
+- אל תזרוק עליו הכל בבת אחת!""",
             
             'gate_question_payslips': """
-🎯 שלב: בדיקת תלושי שכר
-📋 המשימה הבלעדית שלך כעת:
-- הלקוח צריך לענות על שאלת תלושי השכר: "יש לך תלושי שכר מהחודשיים האחרונים?"
-- אם אמר כן/יש לו/בחיוב: עבור מיד לשאלה הבאה - "נהדר! יש לך יכולת להפקיד ערבות של 2 חודשי שכירות?"
-- אם אמר לא/אין לו/בשלילה: הסבר בחום ובהבנה שזו דרישה בסיסית לביטוח הבעלים
-- אם התשובה לא ברורה: בקש הבהרה בטון ידידותי - "אני צריך לוודא - יש לך תלושי שכר קבועים?"
-
-💡 טיפים לתגובה טבעית:
-- הגב על מה שהלקוח אמר באופן ספציפי
-- השתמש בביטויים כמו "נהדר", "מעולה", "הבנתי"
-- אל תחזור על השאלה אם כבר קיבלת תשובה ברורה
-- היה אנושי ולא רובוטי
-
-🚫 אסור בהחלט:
-- לעבור לשאלות על חדרים/תקציב
-- לדבר על נכסים
-- לחזור על אותה שאלה אם כבר יש תשובה
-""",
+🎯 אתה מחכה לתשובה על תלושי שכר
+- אם אמר שיש לו - תעבור לשאול על ערבות בצורה טבעית
+- אם אמר שאין לו - תסביר בעדינות שזה נדרש
+- אם לא הבנת - תשאל הבהרה""",
             
             'gate_question_deposit': """
-🎯 שלב: בדיקת יכולת ערבות
-📋 המשימה הבלעדית שלך כעת:
-- הלקוח צריך לענות על שאלת הערבות: "יש לך יכולת להפקיד ערבות של 2 חודשי שכירות?"
-- אם אמר כן/אוקיי/בטח/אשלם/יכול לשלם: עבור מיד לשאלה הבאה - "מעולה! מתי אתה מתכנן להיכנס לדירה?"
-- אם אמר לא/אין אפשרות: הסבר בהבנה על חשיבות הערבות לביטוח הבעלים
-- אם התשובה לא ברורה: בקש הבהרה - "האם יש לך אפשרות להפקיד ערבות של 2 חודשים?"
-
-💡 זיהוי תגובות חיוביות:
-- "אוקיי", "בסדר", "אשלם את זה", "יכול לשלם" = כן
-- "לא", "אין לי", "לא יכול", "אין אפשרות" = לא
-- הקשב לטון ולכוונה, לא רק למילים
-
-🔄 EDGE CASE - שינוי תשובה:
-- אם הלקוח משנה דעתו - קבל את השינוי בחיוב
-- "הבנתי שהמצב השתנה" - השתמש בתשובה החדשה
-
-🚫 אסור בהחלט:
-- לשאול על חדרים או תקציב עדיין
-- לדבר על נכסים ספציפיים
-- להתעלם מתשובות חיוביות
-""",
+🎯 אתה מחכה לתשובה על ערבות
+- אם אמר שיכול לשלם - תעבור לשאול מתי הוא רוצה להיכנס
+- אם אמר שלא יכול - תסביר בהבנה למה זה נדרש
+- אם לא ברור - תשאל שוב בצורה ידידותית""",
             
             'gate_question_move_date': """
-🎯 שלב: בדיקת תאריך כניסה
-📋 המשימה הבלעדית שלך כעת:
-- הלקוח עונה על תאריך הכניסה
-- אם התאריך תקין (עד 60 יום): עבור לאיסוף פרופיל - שאל "כמה חדרים אתה מחפש?"
-- אם התאריך רחוק מדי: הסבר שאתה עובד על זמינות קרובה יותר
-- זה המעבר לשלב איסוף הפרופיל!
-
-🚫 אסור בהחלט:
-- לשאול כמה שאלות בבת אחת
-- לדבר על נכסים ספציפיים עדיין
-""",
+🎯 אתה מחכה לדעת מתי הוא רוצה להיכנס
+- אם התאריך קרוב (עד 60 יום) - תתחיל לשאול על העדפות
+- אם התאריך רחוק - תסביר שאתה עובד על תקופות קרובות יותר
+- עבור לשאול כמה חדרים באופן טבעי""",
             
             'collecting_profile': f"""
-🎯 שלב: איסוף פרופיל לקוח
-📊 מה יש לנו כבר: {self._get_existing_profile_info(lead_data)}
-📋 המשימה הבלעדית שלך כעת:
-- שאל על הדבר הראשון שחסר לפי הסדר: חדרים → תקציב → חניה → אזור מועדף
-- שאל שאלה אחת בלבד!
-- אל תשאל על מידע שכבר קיים
-- כשיש לך הכל - עבור לחיפוש נכסים
-
-🔄 EDGE CASE - מידע סותר/שינוי:
-- אם הלקוח שינה מידע שכבר נתן (תקציב, חדרים וכו') - השתמש בחדש
-- אם הוא נותן תקציב לא הגיוני - שאל הבהרה בעדינות
-- אם הוא רוצה לחזור ולשנות פרטים - אפשר את זה
-
-🚫 אסור בהחלט:
-- לשאול כמה שאלות בבת אחת
-- לחזור על שאלות שכבר נשאלו
-- לדבר על נכסים לפני שיש פרופיל מלא
-""",
+🎯 אתה אוסף פרטים כדי למצוא לו דירה מושלמת
+מה שחסר לדעת: {', '.join(self._get_missing_profile_fields_human(lead_data))}
+- תשאל רק על דבר אחד בכל פעם בסדר הנכון: חדרים → תקציב → חניה → אזור
+- תהיה סקרן ומעוניין באמת
+- 🚨 חובה לשאול על תקציב בצורה ברורה: "מה התקציב החודשי שלך?" או "כמה אתה יכול להרשות לעצמך?"
+- אל תשער תקציב מההודעות הקודמות - תמיד תשאל ישירות!
+- אם נראה שיש לך מספיק מידע - תתרגש ותגיד "בוא אראה לך דירות!"
+- אם יש לך הכל - תתרגש ותגיד שתחפש לו דירות!""",
             
             'qualified': """
-🎯 שלב: לקוח מוכשר - מוכן לראות נכסים!
-📋 המשימה שלך כעת:
-- הלקוח עבר את כל השלבים בהצלחה וכבר יש לו פרופיל מלא
-- היה חכם ומבין כוונות: אם הלקוח מזכיר מקום/אזור/רחוב או שואל על דירות - הוא רוצה לראות נכסים!
-- אם הלקוח מזכיר כל דבר שקשור למיקום/אזור/שכונה/רחוב - ענה: "בוא אראה לך מה יש לי!"
-- אם שואל שאלות כלליות - הציע לראות דירות באופן טבעי
-- היה אקטיבי ומקדם - הלקוח מוכן לקנות!
-
-🧠 מתי להציג נכסים (השתמש בביטויים האלה):
-- כשמזכירים מקום: "בוא אראה לך דירות באזור הזה!"
-- כששואלים על דירות: "יש לי כמה אפשרויות מעולות, אציג לך!"
-- בשיחה כללית: "מושלם! בואו נראה מה יש לי עבורך"
-
-💡 ביטויים קסם (אם אתה אומר אותם, המערכת תראה נכסים אוטומטית):
-- "בוא אראה לך"
-- "אציג לך" 
-- "יש לי"
-- "מצאתי"
-
-🚫 אסור בהחלט:
-- לחזור לשאלות כשרות/סינון
-- לשאול שוב על פרטים שכבר יש
-- להיות פסיבי - תהיה פרואקטיבי!
-""",
+🎯 הלקוח מוכשר! יש לך את כל המידע
+- אם הוא שואל על דירות או מזכיר מקום - תציע לו לראות אפשרויות
+- תהיה פרואקטיבי ומתלהב
+- הזמן להראות לו דירות מתאימות!""",
             
             'scheduling_in_progress': """
-🎯 שלב: תיאום פגישה בתהליך
-📋 המשימה שלך כעת:
-- הלקוח קיבל קישור לתיאום בקלנדלי
-- המטרה: לעזור לו להשלים את התיאום או לענות על שאלות
-- אם הוא אומר שקבע/תיאם/הזמין - ברך לו ותגיד שתשלח תזכורות
-- אם יש לו בעיות טכניות - הפנה לעזרה
-- אם הוא שואל על דירות - הסבר שאחרי הפגישה תראה לו הכל
-
-💡 תגובות מומלצות:
-- "מעולה שקבעת! אני אשלח לך תזכורות"
-- "יש לך בעיה עם הקישור? בואו נפתור"
-- "אני כבר מכין את הדירות המתאימות לפגישה"
-
-🚫 אסור:
-- לחזור לשאלות כשרות
-- לשאול שוב על פרטים
-- להציע דירות (נעשה בפגישה)
-""",
+🎯 הוא אמור לתאם פגישה בקלנדלי
+- אם הוא אומר שתיאם - תתרגש ותאשר
+- אם יש לו בעיות - תעזור לו
+- תהיה תומך ועוזר""",
             
             'tour_scheduled': """
-🎯 שלב: סיור מתואם
-📋 המשימה שלך כעת:
-- הלקוח כבר תיאם סיור דרך הקלנדלי
-- ענה על שאלות על הסיור, מיקום, זמן
-- תן מידע נוסף על הנכס אם נשאל
-- היה תומך ועוזר לקראת הסיור
+🎯 יש לכם פגישה מתוכננת! הכל מסודר!
+- הפגישה כבר נקבעה בקלנדלי - הכל מאורגן
+- ענה על שאלות על הפגישה בלבד (שעה, מיקום, הכנות)
+- תהיה מתרגש לפגוש אותו אבל לא מוגזם
+- אם הוא אומר תודה/thanks - פשוט תגיב בחיוביות קצרה
+- 🚨 חשוב: אל תשאל שוב על תלושי שכר, ערבות, פרטים אישיים - הכל כבר נבדק ומסודר!
+- אל תתייחס להודעות ישנות, רק להודעה הנוכחית
+- תהיה מקצועי וקצר ולעניין""",
 
-🚫 אסור בהחלט:
-- לנסות לתאם סיור נוסף
-- לחזור לשאלות איסוף מידע
-""",
-
-            'gate_failed': f"""
-🎯 שלב: לא עבר בדיקות כשרות - אבל עדיין יש תקווה!
-📊 מצב הלקוח:
-- תלושי שכר: {'✅ יש' if lead_data.get('has_payslips') else '❌ אין' if lead_data.get('has_payslips') == False else '❓ לא נבדק'}
-- יכולת ערבות: {'✅ יש' if lead_data.get('can_pay_deposit') else '❌ אין' if lead_data.get('can_pay_deposit') == False else '❓ לא נבדק'}
-
-📋 המשימה שלך כעת:
-- הלקוח לא עבר את בדיקת {'הערבות' if lead_data.get('has_payslips') and not lead_data.get('can_pay_deposit') else 'תלושי השכר' if not lead_data.get('has_payslips') else 'הכשרות'}
-- הסבר בחום ובהבנה מה נדרש ולמה
-- תן תקווה לעתיד - "אם המצב ישתנה, אשמח לעזור לך"
-- השאר דלת פתוחה לחזרה
-
-🔄 קריטי - זיהוי שינוי מצב:
-- אם הלקוח אומר "אוקיי אשלם"/"יש לי עכשיו"/"יכול לשלם" - זה שינוי מצב!
-- הכר את השינוי בהתלהבות: "נהדר! אם יש לך אפשרות לשלם עכשיו, בואו נמשיך!"
-- עבור מיד לשלב הבא אם כל הדרישות מתקיימות
-- אל תתעלם מתשובות חיוביות חדשות!
-
-💡 ביטויים שמעידים על שינוי מצב:
-- "אוקיי", "בסדר", "אשלם", "יכול לשלם", "יש לי עכשיו", "אתן ערבות"
-
-🚫 אסור בהחלט:
-- להתעלם מתשובות חדשות חיוביות
-- לסרב לקבל שינוי מצב
-- להחזיק בכישלון הקודם אם המצב השתנה
-""",
+            'gate_failed': """
+🎯 הוא לא עבר את הבדיקות, אבל אל תוותר
+- תסביר בחום למה צריך את הדרישות
+- תן לו תקווה לעתיד
+- אם הוא משנה דעה עכשיו - תקבל את זה בשמחה!""",
 
             'future_fit': """
-🎯 שלב: מתאים לעתיד רחוק
-📋 המשימה שלך כעת:
-- הלקוח רוצה לעבור בעוד יותר מ-60 יום
-- הסבר שאתה מתמחה בזמינות קרובה יותר
-- הציע לשמור אותו ברשימה ולחזור אליו לקראת התאריך
-- סיים את השיחה בנימוס
-- אל תמשיך עם איסוף פרטים
-
-🚫 אסור בהחלט:
-- להמשיך לשאול על חדרים/תקציב
-- להציג נכסים עכשיו
-- לתאם סיורים מיידיים
-""",
+🎯 הוא רוצה לעבור רחוק מדי בעתיד
+- תסביר שאתה מתמקד בתקופות קרובות
+- תציע לחזור אליו יותר קרוב למועד
+- תהיה חיובי למרות הפרידה""",
 
             'no_fit': """
-🎯 שלב: אין התאמה כרגע
-📋 המשימה שלך כעת:
-- לא נמצאו נכסים שמתאימים לקריטריונים של הלקוח
-- הסבר שכרגע אין בדיוק מה שהוא מחפש
-- הציע אלטרנטיבות (תקציב שונה, פחות חדרים וכו')
-- שאל אם הוא גמיש בקריטריונים
-- הציע לשמור אותו ברשימה
-
-🚫 אסור בהחלט:
-- להציג נכסים שלא מתאימים
-- לתת מחירים לא נכונים
-- להבטיח דברים שאין לך
-"""
+🎯 לא מצאת לו דירות מתאימות
+- תהיה כנה אבל עדיין מלא תקווה
+- תציע אלטרנטיבות (תקציב/חדרים/אזור)
+- תשאל אם הוא גמיש באיזשהו קריטריון"""
         }
         
-        return instructions.get(stage, f"🎯 שלב לא מוכר: {stage} - ענה בצורה כללית ומקצועית.")
+        return guidance_map.get(stage, f"🎯 שלב {stage} - תענה בצורה טבעית ועוזרת")
     
-    def _get_existing_profile_info(self, lead_data: Dict) -> str:
-        """Get formatted string of existing profile information"""
-        existing = []
-        if lead_data.get('rooms'):
-            existing.append(f"חדרים: {lead_data.get('rooms')}")
-        if lead_data.get('budget'):
-            existing.append(f"תקציב: {lead_data.get('budget'):,.0f} ש\"ח")
-        if lead_data.get('has_parking') is not None:
-            existing.append(f"חניה: {'כן' if lead_data.get('has_parking') else 'לא'}")
-        if lead_data.get('preferred_area'):
-            existing.append(f"אזור: {lead_data.get('preferred_area')}")
-        
-        return " | ".join(existing) if existing else "אין מידע עדיין"
+    def _get_missing_profile_fields_human(self, lead_data: Dict) -> List[str]:
+        """Get missing fields in human language"""
+        missing = []
+        if not lead_data.get('rooms'):
+            missing.append("כמה חדרים")
+        if not lead_data.get('budget'):
+            missing.append("תקציב")
+        if lead_data.get('has_parking') is None:
+            missing.append("חניה")
+        if not lead_data.get('preferred_area'):
+            missing.append("אזור מועדף")
+        return missing
     
-    def _post_process_response(self, response: str, stage: str) -> str:
-        """Post-process response to ensure compliance"""
+    def _format_for_whatsapp(self, response: str) -> str:
+        """Format response for WhatsApp with proper line breaks, emojis, and bold formatting"""
         
-        # Remove any unwanted patterns
-        response = response.replace("כבוט", "").replace("כמערכת", "").replace("כ-AI", "")
-        response = response.replace("בוט", "מערכת").replace("AI", "מערכת")
+        # Clean up any unwanted AI artifacts but keep ** for bold
+        response = response.replace("***", "**")  # Convert triple asterisks to double
+        response = response.replace("בוט", "").replace("AI", "").replace("מערכת", "")
         
-        # Ensure Hebrew characters
-        if not any('\u0590' <= char <= '\u05FF' for char in response):
-            logger.warning(f"Non-Hebrew response detected for stage {stage}")
-            return "מצטער, יש לי בעיה טכנית קלה. אנא חזור על השאלה."
+        # Ensure proper line breaks
+        lines = response.split('\n')
+        formatted_lines = []
         
-        # Trim to reasonable length
-        if len(response) > 300:
-            response = response[:297] + "..."
+        for line in lines:
+            line = line.strip()
+            if line:
+                formatted_lines.append(line)
         
-        return response.strip()
+        # Join with proper spacing for WhatsApp
+        formatted_response = '\n\n'.join(formatted_lines) if len(formatted_lines) > 1 else '\n'.join(formatted_lines)
+        
+        # Count emojis and limit to 2 max
+        import re
+        emoji_pattern = re.compile(r'[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF\U0001F1E0-\U0001F1FF\U0001F700-\U0001F77F\U0001F780-\U0001F7FF\U0001F800-\U0001F8FF\U0001F900-\U0001F9FF\U0001FA00-\U0001FA6F\U0001FA70-\U0001FAFF\U00002600-\U000027BF\U0001F004\U0001F0CF\U0001F170-\U0001F251]')
+        emojis = emoji_pattern.findall(formatted_response)
+        
+        if len(emojis) > 2:
+            # Remove excess emojis (keep first 2)
+            for emoji in emojis[2:]:
+                # Remove only the first occurrence of excess emojis
+                formatted_response = formatted_response.replace(emoji, '', 1)
+        
+        # Make sure we have at least one emoji at the end if none exists
+        remaining_emojis = emoji_pattern.findall(formatted_response)
+        if not remaining_emojis:
+            # Add a default friendly emoji at the end if none detected
+            formatted_response = formatted_response + " 😊"
+        
+        return formatted_response.strip()
     
-    def _build_property_recommendation_prompt(self, lead_data: Dict, properties: List[Dict]) -> str:
-        """Build prompt for property recommendations with human tone"""
+    def _build_human_property_recommendation_prompt(self, lead_data: Dict, properties: List[Dict]) -> str:
+        """Build human-like property recommendation prompt"""
         
-        prompt = f"""אתה ליאור, סוכן נדל"ן מקצועי. תציג את הנכסים המתאימים בטון אנושי וחם.
+        prompt = f"""אתה ליאור, סוכן נדל"ן מתל אביב, וזה הרגע המרגש! מצאת דירות מושלמות עבור הלקוח.
 
-👤 פרופיל הלקוח:
-- חדרים: {lead_data.get('rooms')}
-- תקציב: {lead_data.get('budget'):,.0f} ש\"ח
-- חניה: {'נדרש' if lead_data.get('has_parking') else 'לא נדרש'}
-- אזור: {lead_data.get('preferred_area', 'ללא העדפה')}
+🎉 הלקוח שלך חיפש:
+- {lead_data.get('rooms')} חדרים
+- תקציב עד {lead_data.get('budget'):,.0f} ש\"ח
+- {'עם חניה' if lead_data.get('has_parking') else 'בלי חניה'}
+- באזור: {lead_data.get('preferred_area', 'בכל תל אביב')}
 
-🏠 הנכסים שמצאתי עבורו:
-"""
+🏠 והנה מה שמצאת בשבילו:"""
         
         for i, prop in enumerate(properties, 1):
             property_info = prop.get('properties', {}) if isinstance(prop.get('properties'), dict) else {}
             prompt += f"""
-דירה {i}:
-- 📍 {property_info.get('address', 'כתובת לא זמינה')}
-- 🏠 {prop.get('rooms')} חדרים
-- 💰 {prop.get('price'):,.0f} ש\"ח/חודש
-- 🚗 חניה: {'כן' if prop.get('has_parking') else 'לא'}
-- 📏 {prop.get('area_sqm', 'לא צוין')} מ"ר
-- 🏢 קומה {prop.get('floor', 'לא צוין')}
-"""
-        
-        prompt += """
 
-📝 הוראות להצגה:
-1. התחל בהצגה חמה ואנושית "מצאתי כמה דירות מעולות בשבילך!"
-2. הצג כל דירה בצורה מושכת (2-3 שורות לכל אחת)
-3. הדגש מה מתאים לבקשות שלו
-4. סיים בהצעה לתאם סיור
-5. טון אנושי וחם - אתה ליאור האדם!
-6. עברית בלבד
-7. מקסימום 4-5 משפטים סה"כ
-"""
+דירה {i}:
+📍 {property_info.get('address', 'תל אביב')}
+🏠 {prop.get('rooms')} חדרים | 💰 {prop.get('price'):,.0f} ש\"ח/חודש
+🚗 {'חניה פרטית' if prop.get('has_parking') else 'ללא חניה'} | 📏 {prop.get('area_sqm', 'נ/א')} מ"ר | 🏢 קומה {prop.get('floor', 'נ/א')}"""
+        
+        prompt += f"""
+
+             💭 עכשיו תגיב כליאור האמיתי:
+             - תהיה מתרגש שמצאת משהו טוב!
+             - אימוג'ים רק בסוף המשפטים, לא בהתחלה!
+             - תכתוב בשורות נפרדות (כמו בווטסאפ)
+             - תדגיש מה מיוחד בכל דירה בקשר לבקשות שלו
+             - תסיים עם הצעה לתאם סיור באופן טבעי
+             - תהיה אנושי, חם ומקצועי
+             - מקסימום 2 אימוג'ים בכל ההודעה!
+             - השאלה החשובה בבולד: **השאלה**
+             - עברית בלבד!
+             - הזכר שתשלח תמונות של הדירות מייד אחרי ההודעה!
+             
+             זכור: אתה לא רובוט! אתה ליאור שבאמת מתלהב כשמוצא דירה מושלמת ללקוח!"""
         
         return prompt
     
-    def _build_no_properties_prompt(self, lead_data: Dict, conversation_history: List[Dict]) -> str:
-        """Build prompt for no properties found scenario"""
+    def _build_human_no_properties_prompt(self, lead_data: Dict, conversation_history: List[Dict]) -> str:
+        """Build human-like prompt for no properties found scenario"""
         
-        prompt = f"""אתה ליאור, סוכן נדל"ן מקצועי. לא מצאת דירות שמתאימות בדיוק לקריטריונים של הלקוח.
+        prompt = f"""אתה ליאור, ויש לך בעיה קטנה. חיפשת דירות ללקוח שלך ולא מצאת משהו שמתאים בדיוק לבקשה שלו.
 
-👤 מה הלקוח חיפש:
-- חדרים: {lead_data.get('rooms')}
-- תקציב: {lead_data.get('budget'):,.0f} ש\"ח
-- חניה: {'נדרש' if lead_data.get('has_parking') else 'לא נדרש'}
-- אזור: {lead_data.get('preferred_area', 'ללא העדפה')}
+הוא רצה:
+- {lead_data.get('rooms')} חדרים  
+- עד {lead_data.get('budget'):,.0f} ש\"ח
+- {'עם חניה' if lead_data.get('has_parking') else 'בלי חניה'}
 
-📝 המשימה שלך:
-1. הסבר בטון אנושי שלא מצאת בדיוק מה שחיפש
-2. הציע אלטרנטיבות (תקציב גבוה יותר/פחות חדרים/אזור אחר)
-3. שאל אם הוא גמיש באחד הקריטריונים
-4. הצע שתשמור עליו ברשימה למקרה שמשהו יתפנה
-5. טון חיובי ותומך - אתה רוצה לעזור!
-6. עברית בלבד
-7. מקסימום 3-4 משפטים
-"""
+אבל אין בזמן הזה דירות זמינות שמתאימות בדיוק.
+
+             💭 עכשיו תגיב כליאור האמיתי:
+             - תהיה קצר וישיר - מקסימום 4-5 שורות!
+             - אימוג'ים רק בסוף המשפטים, לא בהתחלה!
+             - תציע רק 2-3 אלטרנטיבות קצרות:
+               * תקציב קצת גבוה יותר?
+               * פחות חדרים?
+               * בלי חניה?
+             - תשאל איזה קריטריון הוא הכי גמיש בו
+             - תהיה אופטימי אבל קצר!
+             - מקסימום 2 אימוג'ים בהודעה!
+             - השאלה בבולד: **השאלה**
+             - עברית בלבד!
+             
+             זכור: קצר וחברותי, לא ארוך ומורכב!"""
         
         return prompt
     
@@ -567,8 +584,50 @@ class GeminiService:
             
             logger.info("Generating raw AI response")
             
-            response = self.model.generate_content(prompt)
-            result = response.text.strip()
+            # Configure generation settings for more creative and human-like responses
+            generation_config = types.GenerateContentConfig(
+                temperature=1.2,
+                top_p=0.95,
+                top_k=40,
+                max_output_tokens=400,
+                safety_settings=[
+                    types.SafetySetting(
+                        category="HARM_CATEGORY_HARASSMENT",
+                        threshold="BLOCK_ONLY_HIGH"
+                    ),
+                    types.SafetySetting(
+                        category="HARM_CATEGORY_HATE_SPEECH", 
+                        threshold="BLOCK_ONLY_HIGH"
+                    ),
+                    types.SafetySetting(
+                        category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                        threshold="BLOCK_ONLY_HIGH"
+                    ),
+                    types.SafetySetting(
+                        category="HARM_CATEGORY_DANGEROUS_CONTENT",
+                        threshold="BLOCK_ONLY_HIGH"
+                    ),
+                ],
+# Note: ThinkingConfig may not be available in this version
+                # thinking_config disabled for now
+            )
+            
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=prompt,
+                config=generation_config
+            )
+            
+            result = ""
+            if hasattr(response, 'text') and response.text:
+                result = response.text.strip()
+            elif hasattr(response, 'candidates') and response.candidates:
+                for candidate in response.candidates:
+                    if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
+                        for part in candidate.content.parts:
+                            if hasattr(part, 'text') and part.text:
+                                result += part.text
+                result = result.strip()
             
             logger.info(f"Raw AI response generated, length: {len(result)}")
             return result

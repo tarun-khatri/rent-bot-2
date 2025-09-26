@@ -20,12 +20,8 @@ class LeadService:
     """AI-powered service for managing lead qualification and conversation flows"""
     
     def __init__(self):
-        """Initialize the lead service"""
-        self.greeting_patterns = [
-            r'\b(שלום|היי|הלו|hello|hi|hey)\b',
-            r'\b(בוקר טוב|ערב טוב|לילה טוב)\b',
-            r'\b(איך הולך|מה נשמע|מה קורה)\b'
-        ]
+        """Initialize the lead service""" 
+        # Removed hardcoded greeting patterns - now using intelligent context-aware detection
     
     def process_lead_message(self, phone_number: str, name: str, message: str) -> str:
         """Main entry point for processing lead messages with AI responses"""
@@ -41,9 +37,9 @@ class LeadService:
             # Log user message
             db_service.log_conversation(lead['id'], 'user', message)
             
-            # Check for greeting to restart conversation flow
-            if self._is_greeting(message) and lead.get('stage') not in ['new', 'qualified', 'tour_scheduled']:
-                logger.info(f"Detected greeting from lead {lead['id']}, restarting conversation")
+            # Check for greeting, but be smart about when to restart (like a human would)
+            if self._should_restart_conversation(message, lead):
+                logger.info(f"Intelligently restarting conversation for lead {lead['id']} based on context")
                 db_service.update_lead(lead['id'], {'stage': 'new'})
                 lead = db_service.get_lead_by_phone(phone_number)  # Refresh lead data
             
@@ -66,8 +62,8 @@ class LeadService:
         
         logger.info(f"Processing AI response for lead {lead['id']} in stage: {stage}")
         
-        # Get conversation history for context
-        conversation_history = db_service.get_conversation_history(lead['id'], limit=15)
+        # Get conversation history for context - increased for better AI understanding
+        conversation_history = db_service.get_conversation_history(lead['id'], limit=25)
         
         # EDGE CASE HANDLING: Check for qualification restart requests
         restart_result = self._check_for_qualification_restart(lead, message, conversation_history)
@@ -492,8 +488,10 @@ class LeadService:
             return gemini_service.generate_stage_response('collecting_profile', updated_lead, conversation_history, message)
     
     def _handle_profile_collection_with_ai(self, lead: Dict, message: str, conversation_history: List[Dict]) -> str:
-        """Handle profile collection with AI and field updates"""
+        """Handle profile collection with AI and field updates - improved to extract all available info"""
         logger.info(f"Collecting profile info for lead {lead['id']} with AI")
+        
+        # Skip frustration detection for now - let normal data extraction handle the flow
         
         # Check what profile information is missing
         missing_info = self._get_missing_profile_info(lead)
@@ -502,19 +500,33 @@ class LeadService:
             # Profile is complete, search for properties
             return self._complete_profile_and_search_with_ai(lead, conversation_history)
         
-        # Try to extract and update profile information from the message
-        field_to_update = missing_info[0]
-        updates = self._extract_profile_data_from_message(field_to_update, message)
+        # Try to extract ALL profile information from current message and conversation history
+        all_updates = self._extract_all_profile_data(message, conversation_history, missing_info)
         
-        if updates:
-            # Update the lead with extracted information
-            db_service.update_lead(lead['id'], updates)
-            logger.info(f"Updated lead {lead['id']} profile field '{field_to_update}': {updates}")
+        if all_updates:
+            # Update the lead with all extracted information
+            db_service.update_lead(lead['id'], all_updates)
+            logger.info(f"Updated lead {lead['id']} profile fields: {all_updates}")
             
             # Refresh lead data
             updated_lead = db_service.get_lead_by_phone(lead['phone_number'])
             
             # Check if profile is now complete
+            missing_after_update = self._get_missing_profile_info(updated_lead)
+            if not missing_after_update:
+                return self._complete_profile_and_search_with_ai(updated_lead, conversation_history)
+        
+        # If we still need info, but didn't extract anything meaningful, 
+        # try the old single-field approach as fallback
+        field_to_update = missing_info[0]
+        single_update = self._extract_profile_data_from_message(field_to_update, message)
+        
+        if single_update and not all_updates:
+            db_service.update_lead(lead['id'], single_update)
+            logger.info(f"Updated lead {lead['id']} profile field '{field_to_update}': {single_update}")
+            
+            # Refresh and check again
+            updated_lead = db_service.get_lead_by_phone(lead['phone_number'])
             missing_after_update = self._get_missing_profile_info(updated_lead)
             if not missing_after_update:
                 return self._complete_profile_and_search_with_ai(updated_lead, conversation_history)
@@ -527,20 +539,20 @@ class LeadService:
         """Handle qualified lead with AI responses"""
         logger.info(f"Handling qualified lead {lead['id']} with AI")
         
+        # Check if they want to schedule a tour (HIGHEST PRIORITY)
+        if self._is_scheduling_request(message):
+            return self._handle_scheduling_request_with_ai(lead, message, conversation_history)
+        
         # Check if they're asking for property recommendations
         if self._is_property_request(message):
             return self._search_and_present_properties_with_ai(lead, conversation_history)
-        
-        # Check if they want to schedule a tour
-        if self._is_scheduling_request(message):
-            return self._handle_scheduling_request_with_ai(lead, message, conversation_history)
         
         # For qualified leads, let AI decide if they should see properties
         # The AI will be instructed to offer properties proactively
         ai_response = gemini_service.generate_stage_response('qualified', lead, conversation_history, message)
         
-        # If AI suggests showing properties, do it
-        if self._ai_suggests_showing_properties(ai_response):
+        # If AI suggests showing properties, do it (but only if not scheduling)
+        if self._ai_suggests_showing_properties(ai_response) and not self._is_scheduling_request(message):
             logger.info(f"AI suggested showing properties to lead {lead['id']}")
             return self._search_and_present_properties_with_ai(lead, conversation_history)
         
@@ -759,13 +771,53 @@ class LeadService:
     
     # Helper methods for business logic
     
-    def _is_greeting(self, message: str) -> bool:
-        """Check if message is a greeting"""
-        message_lower = message.lower()
-        for pattern in self.greeting_patterns:
-            if re.search(pattern, message_lower, re.IGNORECASE):
-                return True
-        return False
+    def _should_restart_conversation(self, message: str, lead: Dict) -> bool:
+        """
+        Intelligently decide if we should restart the conversation like a human would.
+        A real human agent only restarts when it makes sense contextually.
+        """
+        message_lower = message.lower().strip()
+        
+        # Never restart if we're in initial stages or completed stages
+        current_stage = lead.get('stage', 'new')
+        if current_stage in ['new', 'qualified', 'tour_scheduled']:
+            return False
+        
+        # Check if this is a pure greeting message (not mixed with other content)
+        greeting_only_patterns = [
+            r'^(שלום|היי|הלו|hello|hi|hey)\.?!?$',  # Pure greetings only
+            r'^(שלום|היי|הלו|hello|hi|hey)\s+(ליאור|lior)\.?!?$',  # Greeting + name
+        ]
+        
+        is_pure_greeting = any(re.match(pattern, message_lower, re.IGNORECASE) for pattern in greeting_only_patterns)
+        
+        if not is_pure_greeting:
+            # If message contains other content besides greeting, don't restart
+            return False
+        
+        # Check conversation timing - only restart if it's been a while
+        from datetime import datetime, timedelta
+        now = datetime.now()
+        last_interaction = lead.get('last_interaction')
+        
+        if last_interaction:
+            try:
+                # Parse last interaction time
+                if isinstance(last_interaction, str):
+                    last_time = datetime.fromisoformat(last_interaction.replace('Z', '+00:00'))
+                else:
+                    last_time = last_interaction
+                
+                # Only restart if it's been more than 30 minutes
+                time_diff = now - last_time.replace(tzinfo=None)
+                if time_diff.total_seconds() < 1800:  # 30 minutes
+                    return False
+            except:
+                # If we can't parse time, err on the side of not restarting
+                return False
+        
+        # Only restart for pure greetings after a long break
+        return True
     
     def _analyze_yes_no_response(self, message: str, context: str = None) -> str:
         """Enhanced analysis of yes/no responses with context awareness"""
@@ -877,6 +929,8 @@ Response format: Only return the number of days as an integer, nothing else.
                 return int(numbers[0])
             return 30  # Default fallback
     
+    # Removed overly sensitive frustration detection - was causing issues with valid responses
+
     def _get_missing_profile_info(self, lead: Dict) -> List[str]:
         """Get list of missing profile information in order of collection"""
         missing = []
@@ -899,6 +953,94 @@ Response format: Only return the number of days as an integer, nothing else.
         
         return missing
     
+    def _extract_all_profile_data(self, current_message: str, conversation_history: List[Dict], missing_fields: List[str]) -> Dict:
+        """Extract all available profile data from current message and conversation history"""
+        updates = {}
+        
+        # Get all user messages from conversation (last 10 messages)
+        user_messages = []
+        user_messages.append(current_message)  # Current message first
+        
+        for msg in reversed(conversation_history[-10:]):
+            if msg.get('message_type') == 'user':
+                user_messages.append(msg.get('content', ''))
+        
+        # Combine all messages for comprehensive extraction
+        all_text = ' '.join(user_messages).lower()
+        
+        logger.info(f"Extracting profile data from combined text: {all_text[:100]}...")
+        
+        # Extract rooms (if missing)
+        if 'rooms' in missing_fields:
+            for msg in user_messages:
+                rooms = self._extract_number_from_message(msg)
+                if rooms and 1 <= rooms <= 10:
+                    # Validate it's about rooms
+                    msg_lower = msg.lower()
+                    if any(word in msg_lower for word in ['room', 'חדר', 'bedroom', 'bed']):
+                        updates['rooms'] = rooms
+                        logger.info(f"Extracted rooms: {rooms} from message: {msg[:50]}")
+                        break
+        
+        # Extract budget (if missing)
+        if 'budget' in missing_fields:
+            for msg in user_messages:
+                # Skip messages that are clearly about rooms, not budget
+                msg_lower = msg.lower()
+                if any(word in msg_lower for word in ['room', 'bedroom', 'חדר']) and not any(word in msg_lower for word in ['budget', 'price', 'cost', 'תקציב', 'מחיר']):
+                    continue
+                
+                budget = self._extract_budget_from_message(msg)
+                if budget and budget > 0:
+                    # Extra validation for large standalone numbers (likely budget)
+                    if budget >= 1000 or any(word in msg_lower for word in ['budget', 'price', 'cost', 'תקציב', 'מחיר', 'thousand', 'אלף']):
+                        updates['budget'] = budget
+                        logger.info(f"Extracted budget: {budget} from message: {msg[:50]}")
+                        break
+        
+        # Extract parking (if missing)
+        if 'parking' in missing_fields:
+            for msg in user_messages:
+                msg_lower = msg.lower()
+                # Look for parking-related keywords
+                if any(word in msg_lower for word in ['parking', 'חניה', 'park', 'garage']):
+                    parking_response = self._analyze_yes_no_response(msg, context='parking')
+                    if parking_response in ['yes', 'no']:
+                        updates['has_parking'] = (parking_response == 'yes')
+                        logger.info(f"Extracted parking: {parking_response} from message: {msg[:50]}")
+                        break
+                # Also check for general "yes i need it" after parking question
+                elif any(phrase in msg_lower for phrase in ['yes i need it', 'yes i need', 'i need it']):
+                    updates['has_parking'] = True
+                    logger.info(f"Extracted parking: yes (general affirmation) from message: {msg[:50]}")
+                    break
+        
+        # Extract area (if missing)
+        if 'area' in missing_fields:
+            for msg in user_messages:
+                msg_lower = msg.lower()
+                
+                # Only skip obvious frustration messages
+                if any(phrase in msg_lower for phrase in [
+                    'already told you', 'i already told you', 'כבר אמרתי לך'
+                ]):
+                    continue  # Skip this message
+                
+                # Look for area-related responses
+                if any(phrase in msg_lower for phrase in [
+                    'tel aviv', 'תל אביב', 'anywhere', 'any area', 'any place', 'כל מקום', 
+                    'לא משנה', 'לא אכפת', 'open to', 'flexible', 'center', 'מרכז',
+                    'north', 'south', 'צפון', 'דרום', 'near', 'close to', 'קרוב'
+                ]) or (len(msg.split()) <= 3 and not any(char.isdigit() for char in msg)):  # Short non-numeric responses
+                    area = msg.strip()
+                    if len(area) > 1:
+                        updates['preferred_area'] = area
+                        logger.info(f"Extracted area: {area} from message: {msg[:50]}")
+                        break
+        
+        logger.info(f"Total extracted updates: {updates}")
+        return updates
+    
     def _extract_profile_data_from_message(self, field: str, message: str) -> Dict:
         """Extract profile data from message based on field type"""
         updates = {}
@@ -919,10 +1061,25 @@ Response format: Only return the number of days as an integer, nothing else.
                 updates['has_parking'] = (parking_response == 'yes')
                 
         elif field == 'area':
-            # Any non-empty text is valid for area preference
+            # Only extract area if it's actually about location preference, not frustration
+            message_lower = message.lower()
+            
+            # Only skip obviously non-location responses
+            if any(phrase in message_lower for phrase in [
+                'already told you', 'i already told you', 'כבר אמרתי לך'
+            ]):
+                return updates  # Don't extract area from obvious frustration
+            
+            # Only extract if it contains location-related keywords or is short location name
             area = message.strip()
             if area and len(area) > 1:
-                updates['preferred_area'] = area
+                # Check if it looks like a real area preference
+                if any(keyword in message_lower for keyword in [
+                    'tel aviv', 'תל אביב', 'anywhere', 'any area', 'any place', 'כל מקום',
+                    'לא משנה', 'לא אכפת', 'open to', 'flexible', 'center', 'מרכז',
+                    'north', 'south', 'צפון', 'דרום', 'near', 'close to', 'קרוב'
+                ]) or len(area.split()) <= 3:  # Short responses likely to be area names
+                    updates['preferred_area'] = area
         
         return updates
     
@@ -955,6 +1112,29 @@ Response format: Only return the number of days as an integer, nothing else.
     def _extract_budget_from_message(self, message: str) -> Optional[float]:
         """Extract budget from message"""
         try:
+            message_lower = message.lower()
+            
+            # Skip messages that are clearly about time/dates, not budget
+            time_indicators = ['day', 'days', 'week', 'weeks', 'month', 'months', 'year', 'years', 
+                             'יום', 'ימים', 'שבוע', 'שבועות', 'חודש', 'חודשים', 'שנה', 'שנים',
+                             'מחר', 'today', 'tomorrow', 'next', 'הבא', 'בעוד']
+            
+            if any(indicator in message_lower for indicator in time_indicators):
+                return None
+            
+            # Skip messages that don't have budget-related keywords
+            budget_keywords = ['budget', 'price', 'cost', 'pay', 'money', 'afford', 'שכירות',
+                             'תקציב', 'מחיר', 'עלות', 'לשלם', 'כסף', 'אלף', 'k', '₪', 'ש"ח']
+            
+            if not any(keyword in message_lower for keyword in budget_keywords):
+                # Only extract if it's a clear standalone number (like "5000")
+                numbers = re.findall(r'\b\d{4,5}\b', message)  # Only 4-5 digit numbers
+                if numbers:
+                    budget = float(numbers[0])
+                    if 1000 <= budget <= 50000:
+                        return budget
+                return None
+            
             # Remove commas and extract numbers
             cleaned = re.sub(r'[,\s]', '', message)
             numbers = re.findall(r'\d+', cleaned)
@@ -963,10 +1143,10 @@ Response format: Only return the number of days as an integer, nothing else.
                 budget = float(numbers[0])
                 
                 # Handle different units
-                message_lower = message.lower()
                 if 'k' in message_lower or 'אלף' in message_lower:
                     budget *= 1000
-                elif budget < 100:  # Assume thousands if very small number
+                elif budget < 100 and any(keyword in message_lower for keyword in budget_keywords):
+                    # Only multiply if it's clearly about budget
                     budget *= 1000
                 
                 # Reasonable budget range (1000-50000 NIS)
@@ -1037,18 +1217,48 @@ Response format: Only return the number of days as an integer, nothing else.
     def _is_scheduling_request(self, message: str) -> bool:
         """Check if message is requesting to schedule a tour"""
         message_lower = message.lower()
+        
+        # Strong scheduling indicators (high priority)
+        strong_scheduling_phrases = [
+            'lets schedule', 'let\'s schedule', 'schedule a tour', 'schedule tour', 
+            'schdule', 'schedule', 'schedual',  # Common typos
+            'book a tour', 'book tour', 'arrange a tour', 'arrange tour',
+            'set up a tour', 'setup a tour', 'plan a tour', 'plan tour',
+            'tor', 'toor', 'tour',  # Various spellings of tour
+            'לתאם סיור', 'לקבוע סיור', 'סיור', 'בואו נתאם', 'בוא נתאם'
+        ]
+        
+        # Special case: if message contains "lets" or "let's" with schedule-related words
+        if ('lets' in message_lower or 'let\'s' in message_lower) and any(word in message_lower for word in ['schedule', 'schdule', 'schedual', 'tour', 'tor', 'toor']):
+            return True
+        
+        for phrase in strong_scheduling_phrases:
+            if phrase in message_lower:
+                return True
+        
+        # Check for scheduling-related keywords only if they appear with action words
         scheduling_keywords = [
-            # Hebrew
-            'סיור', 'פגישה', 'ביקור', 'לראות', 'לבוא', 'לתאם', 'זמן',
+            # Hebrew 
+            'פגישה', 'ביקור', 'לראות', 'לבוא', 'לתאם', 'זמן',
             'מתי', 'אפשר', 'נוח לך', 'תיאום', 'קביעה',
             # English
-            'schedule', 'meeting', 'appointment', 'visit', 'tour', 'see',
+            'schedule', 'meeting', 'appointment', 'visit', 'tour',
             'meet', 'when', 'time', 'book', 'arrange'
         ]
         
-        for keyword in scheduling_keywords:
-            if keyword in message_lower:
-                return True
+        action_words = [
+            'lets', 'let\'s', 'can we', 'want to', 'need to', 'would like',
+            'i want', 'we want', 'i need', 'we need', 'בואו', 'בוא', 'אני רוצה',
+            'אנחנו רוצים', 'צריך', 'רוצה'
+        ]
+        
+        # Check if message contains both action words and scheduling keywords
+        has_action = any(action in message_lower for action in action_words)
+        has_scheduling = any(keyword in message_lower for keyword in scheduling_keywords)
+        
+        if has_action and has_scheduling:
+            return True
+            
         return False
 
 
