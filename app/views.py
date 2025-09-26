@@ -208,10 +208,7 @@ def webhook_post():
 def calendly_webhook_post():
     return handle_calendly_webhook()
 
-# Health and monitoring routes
-@webhook_blueprint.route("/health", methods=["GET"])
-def health_check():
-    return get_health_status()
+# Health and monitoring routes (removed duplicate health check)
 
 @webhook_blueprint.route("/metrics", methods=["GET"])
 def metrics_endpoint():
