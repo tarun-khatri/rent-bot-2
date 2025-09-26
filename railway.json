@@ -7,8 +7,15 @@
   "deploy": {
     "startCommand": "python run.py",
     "healthcheckPath": "/health",
-    "healthcheckTimeout": 300,
+    "healthcheckTimeout": 600,
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 3
+  },
+  "environment": {
+    "SKIP_STARTUP_CHECK": "true",
+    "FLASK_ENV": "production",
+    "FLASK_DEBUG": "false",
+    "HOST": "0.0.0.0",
+    "PORT": "8080"
   }
 }

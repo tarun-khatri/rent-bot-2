@@ -16,8 +16,15 @@ def main():
     """Main application entry point"""
     logger.info("🏠 Starting Real Estate Leasing Bot...")
     
-    # Run startup checks if not in production (skip for Railway deployment)
-    if not os.getenv('SKIP_STARTUP_CHECK', '').lower() == 'true':
+    # Skip startup checks in production environments (Railway, Heroku, etc.)
+    is_production = (
+        os.getenv('FLASK_ENV') == 'production' or 
+        os.getenv('RAILWAY_ENVIRONMENT') or 
+        os.getenv('DYNO') or  # Heroku
+        os.getenv('SKIP_STARTUP_CHECK', '').lower() == 'true'
+    )
+    
+    if not is_production:
         logger.info("Running startup checks...")
         try:
             from startup_check import main as startup_check
@@ -29,6 +36,8 @@ def main():
         except Exception as e:
             logger.error(f"Startup check failed with error: {e}")
             sys.exit(1)
+    else:
+        logger.info("🚀 Production environment detected - skipping startup checks")
     
     # Create Flask application
     try:
