@@ -140,7 +140,8 @@ def process_whatsapp_message(body):
 
 
 def is_valid_whatsapp_message(body):
-    """Check if the incoming webhook event has a valid WhatsApp message structure"""
+    """Check if the incoming webhook event has a valid WhatsApp message structure
+    and is intended for this bot's phone number"""
     try:
         # Check basic structure
         if not (body.get("object") and body.get("entry")):
@@ -174,6 +175,14 @@ def is_valid_whatsapp_message(body):
         
         if not (contact.get("wa_id") and contact.get("profile", {}).get("name")):
             logger.debug("Message missing contact information")
+            return False
+        
+        # Validate that the message is for this bot's phone number
+        configured_phone_id = current_app.config.get("PHONE_NUMBER_ID")
+        webhook_phone_id = value.get("metadata", {}).get("phone_number_id")
+        
+        if configured_phone_id and webhook_phone_id and configured_phone_id != webhook_phone_id:
+            logger.info(f"Ignoring message for different phone number - configured: {configured_phone_id}, webhook: {webhook_phone_id}")
             return False
         
         logger.debug("Valid WhatsApp message structure confirmed")
