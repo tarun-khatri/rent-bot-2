@@ -96,6 +96,9 @@ def process_text_for_whatsapp(text):
     return whatsapp_style_text
 
 
+# Global set to track processed message IDs (in production, use Redis or database)
+processed_message_ids = set()
+
 def process_whatsapp_message(body):
     """Process incoming WhatsApp message through the lead service"""
     try:
@@ -109,6 +112,18 @@ def process_whatsapp_message(body):
         message_data = body["entry"][0]["changes"][0]["value"]["messages"][0]
         message_body = message_data["text"]["body"]
         message_id = message_data.get("id")
+        
+        # Check if we've already processed this message
+        if message_id and message_id in processed_message_ids:
+            logger.info(f"Message {message_id} already processed, skipping")
+            return
+        
+        # Add message ID to processed set
+        if message_id:
+            processed_message_ids.add(message_id)
+            # Keep only last 1000 message IDs to prevent memory issues
+            if len(processed_message_ids) > 1000:
+                processed_message_ids.clear()
         
         logger.info(f"Message from {name} ({wa_id}): {message_body[:100]}...")
         

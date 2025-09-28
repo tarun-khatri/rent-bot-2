@@ -34,6 +34,20 @@ class LeadService:
                 lead = db_service.create_lead(phone_number, name)
                 logger.info(f"New lead created: {lead['id']}")
             
+            # Check for duplicate message processing (prevent double responses)
+            recent_messages = db_service.get_conversation_history(lead['id'], limit=3)
+            if recent_messages:
+                last_user_message = None
+                for msg in reversed(recent_messages):
+                    if msg.get('message_type') == 'user':
+                        last_user_message = msg.get('content', '').strip()
+                        break
+                
+                # If this is the same message as the last one, don't process again
+                if last_user_message and last_user_message == message.strip():
+                    logger.info(f"Duplicate message detected for lead {lead['id']}, skipping processing")
+                    return "אני כבר עיבדתי את ההודעה הזו. איך אני יכול לעזור לך?"
+            
             # Log user message
             db_service.log_conversation(lead['id'], 'user', message)
             
@@ -57,32 +71,36 @@ class LeadService:
             return "מצטער, יש לי בעיה טכנית. אנא נסה שוב בעוד כמה דקות."
     
     def _process_by_stage_with_ai(self, lead: Dict, message: str) -> str:
-        """Process message using AI with stage-specific flow control and edge case handling"""
+        """Process message using AI with intelligent intent understanding"""
         stage = lead.get('stage', 'new')
         
         logger.info(f"Processing AI response for lead {lead['id']} in stage: {stage}")
         
-        # Get conversation history for context - increased for better AI understanding
+        # Get conversation history for context
         conversation_history = db_service.get_conversation_history(lead['id'], limit=25)
         
-        # EDGE CASE HANDLING: Check for qualification restart requests
-        restart_result = self._check_for_qualification_restart(lead, message, conversation_history)
-        logger.info(f"Restart check result for lead {lead['id']}: {restart_result is not None}")
-        if restart_result:
-            logger.info(f"Returning restart result for lead {lead['id']}")
-            return restart_result
+        # Use AI to analyze user intent and extract information
+        intent_analysis = gemini_service.analyze_user_intent(message, stage, lead)
+        logger.info(f"AI intent analysis for lead {lead['id']}: {intent_analysis.get('intent')}")
         
-        # Handle stage transitions and business logic
+        # Handle different intents intelligently
+        if intent_analysis.get('intent') == 'frustration':
+            return self._handle_frustration_with_ai(lead, message, conversation_history, intent_analysis)
+        
+        # Extract and update data from user message
+        extracted_data = intent_analysis.get('extracted_data', {})
+        if extracted_data:
+            self._update_lead_with_extracted_data(lead, extracted_data)
+            # Refresh lead data
+            lead = db_service.get_lead_by_phone(lead['phone_number'])
+        
+        # Handle stage transitions based on current stage and intent
         if stage == 'new':
             return self._handle_new_lead_with_ai(lead, message, conversation_history)
-        elif stage == 'gate_question_payslips':
-            return self._handle_payslips_with_ai(lead, message, conversation_history)
-        elif stage == 'gate_question_deposit':
-            return self._handle_deposit_with_ai(lead, message, conversation_history)
-        elif stage == 'gate_question_move_date':
-            return self._handle_move_date_with_ai(lead, message, conversation_history)
+        elif stage in ['gate_question_payslips', 'gate_question_deposit', 'gate_question_move_date']:
+            return self._handle_gate_questions_with_ai(lead, message, conversation_history, intent_analysis)
         elif stage == 'collecting_profile':
-            return self._handle_profile_collection_with_ai(lead, message, conversation_history)
+            return self._handle_profile_collection_with_ai(lead, message, conversation_history, intent_analysis)
         elif stage == 'qualified':
             return self._handle_qualified_lead_with_ai(lead, message, conversation_history)
         elif stage == 'scheduling_in_progress':
@@ -382,6 +400,125 @@ class LeadService:
         
         return gemini_service.generate_stage_response(stage, lead, conversation_history, redirect_message)
     
+    def _update_lead_with_extracted_data(self, lead: Dict, extracted_data: Dict) -> None:
+        """Update lead with data extracted by AI"""
+        updates = {}
+        
+        # Map extracted data to database fields
+        if extracted_data.get('has_payslips') is not None:
+            updates['has_payslips'] = extracted_data['has_payslips']
+        if extracted_data.get('can_pay_deposit') is not None:
+            updates['can_pay_deposit'] = extracted_data['can_pay_deposit']
+        if extracted_data.get('move_in_date'):
+            updates['move_in_date'] = extracted_data['move_in_date']
+        if extracted_data.get('rooms'):
+            updates['rooms'] = extracted_data['rooms']
+        if extracted_data.get('budget'):
+            updates['budget'] = extracted_data['budget']
+        if extracted_data.get('has_parking') is not None:
+            updates['has_parking'] = extracted_data['has_parking']
+        if extracted_data.get('preferred_project'):
+            updates['preferred_area'] = extracted_data['preferred_project']
+        if extracted_data.get('preferred_floor_min'):
+            updates['preferred_floor_min'] = extracted_data['preferred_floor_min']
+        if extracted_data.get('preferred_floor_max'):
+            updates['preferred_floor_max'] = extracted_data['preferred_floor_max']
+        if extracted_data.get('needs_furnished') is not None:
+            updates['needs_furnished'] = extracted_data['needs_furnished']
+        if extracted_data.get('pet_owner') is not None:
+            updates['pet_owner'] = extracted_data['pet_owner']
+        if extracted_data.get('email'):
+            updates['email'] = extracted_data['email']
+        
+        if updates:
+            db_service.update_lead(lead['id'], updates)
+            logger.info(f"Updated lead {lead['id']} with extracted data: {updates}")
+
+    def _handle_frustration_with_ai(self, lead: Dict, message: str, conversation_history: List[Dict], intent_analysis: Dict) -> str:
+        """Handle frustrated users with empathy and AI understanding"""
+        logger.info(f"Handling frustration for lead {lead['id']}")
+        
+        # Use AI to generate empathetic response
+        return gemini_service.generate_stage_response('frustration', lead, conversation_history, message)
+
+    def _handle_gate_questions_with_ai(self, lead: Dict, message: str, conversation_history: List[Dict], intent_analysis: Dict) -> str:
+        """Handle gate questions using AI intent understanding"""
+        stage = lead['stage']
+        logger.info(f"Handling gate question {stage} for lead {lead['id']} with AI")
+        
+        # Check if we have clear answers from AI analysis
+        extracted_data = intent_analysis.get('extracted_data', {})
+        
+        if stage == 'gate_question_payslips':
+            if extracted_data.get('has_payslips') is not None:
+                if extracted_data['has_payslips']:
+                    # Passed payslips gate
+                    db_service.update_lead(lead['id'], {
+                        'stage': 'gate_question_deposit',
+                        'has_payslips': True
+                    })
+                    updated_lead = db_service.get_lead_by_phone(lead['phone_number'])
+                    return gemini_service.generate_stage_response('gate_question_deposit', updated_lead, conversation_history, message)
+                else:
+                    # Failed payslips gate
+                    db_service.update_lead(lead['id'], {
+                        'stage': 'gate_failed',
+                        'has_payslips': False
+                    })
+                    updated_lead = db_service.get_lead_by_phone(lead['phone_number'])
+                    return gemini_service.generate_stage_response('gate_failed', updated_lead, conversation_history, message)
+        
+        elif stage == 'gate_question_deposit':
+            if extracted_data.get('can_pay_deposit') is not None:
+                if extracted_data['can_pay_deposit']:
+                    # Passed deposit gate
+                    db_service.update_lead(lead['id'], {
+                        'stage': 'gate_question_move_date',
+                        'can_pay_deposit': True
+                    })
+                    updated_lead = db_service.get_lead_by_phone(lead['phone_number'])
+                    return gemini_service.generate_stage_response('gate_question_move_date', updated_lead, conversation_history, message)
+                else:
+                    # Failed deposit gate
+                    db_service.update_lead(lead['id'], {
+                        'stage': 'gate_failed',
+                        'can_pay_deposit': False
+                    })
+                    updated_lead = db_service.get_lead_by_phone(lead['phone_number'])
+                    return gemini_service.generate_stage_response('gate_failed', updated_lead, conversation_history, message)
+        
+        elif stage == 'gate_question_move_date':
+            if extracted_data.get('move_in_date'):
+                # Check if move-in date is acceptable
+                days_until_move = self._extract_move_in_days(extracted_data['move_in_date'])
+                max_days = current_app.config.get('MAX_MOVE_IN_DAYS', 60)
+                
+                if days_until_move <= max_days:
+                    # Good move-in date
+                    db_service.update_lead(lead['id'], {
+                        'stage': 'collecting_profile',
+                        'move_in_date': extracted_data['move_in_date']
+                    })
+                    updated_lead = db_service.get_lead_by_phone(lead['phone_number'])
+                    return gemini_service.generate_stage_response('collecting_profile', updated_lead, conversation_history, message)
+                else:
+                    # Too far in future
+                    db_service.update_lead(lead['id'], {
+                        'stage': 'future_fit',
+                        'move_in_date': extracted_data['move_in_date']
+                    })
+                    updated_lead = db_service.get_lead_by_phone(lead['phone_number'])
+                    return gemini_service.generate_stage_response('future_fit', updated_lead, conversation_history, message)
+        
+        # If AI needs clarification, ask for it
+        if intent_analysis.get('needs_clarification'):
+            clarification_question = intent_analysis.get('clarification_question')
+            if clarification_question:
+                return clarification_question
+        
+        # Default to AI-generated response for the current stage
+        return gemini_service.generate_stage_response(stage, lead, conversation_history, message)
+
     def _handle_new_lead_with_ai(self, lead: Dict, message: str, conversation_history: List[Dict]) -> str:
         """Handle new lead with AI-generated welcome and first gate question"""
         logger.info(f"Handling new lead {lead['id']} with AI")
@@ -392,106 +529,10 @@ class LeadService:
         # Get AI response for new lead welcome
         return gemini_service.generate_stage_response('new', lead, conversation_history, message)
     
-    def _handle_payslips_with_ai(self, lead: Dict, message: str, conversation_history: List[Dict]) -> str:
-        """Handle payslips response with AI and business logic"""
-        logger.info(f"Handling payslips response for lead {lead['id']} with AI")
-        
-        # Analyze response type with context
-        response_type = self._analyze_yes_no_response(message, context='payslips')
-        
-        if response_type == 'no':
-            # Failed gate question
-            db_service.update_lead(lead['id'], {
-                'stage': 'gate_failed',
-                'has_payslips': False
-            })
-            return gemini_service.generate_stage_response('gate_failed', lead, conversation_history, message)
-            
-        elif response_type == 'yes':
-            # Passed first gate, move to second question
-            db_service.update_lead(lead['id'], {
-                'stage': 'gate_question_deposit',
-                'has_payslips': True
-            })
-            # Refresh lead data for updated context
-            updated_lead = db_service.get_lead_by_phone(lead['phone_number'])
-            return gemini_service.generate_stage_response('gate_question_deposit', updated_lead, conversation_history, message)
-            
-        else:
-            # Unclear response, AI will ask for clarification while staying in same stage
-            return gemini_service.generate_stage_response('gate_question_payslips', lead, conversation_history, message)
     
-    def _handle_deposit_with_ai(self, lead: Dict, message: str, conversation_history: List[Dict]) -> str:
-        """Handle deposit response with AI and business logic"""
-        logger.info(f"Handling deposit response for lead {lead['id']} with AI")
-        
-        # Check if this might be a move-in date response (user skipped ahead)
-        # Only if there are clear time indicators AND it's not a no/yes response
-        move_days = self._extract_move_in_days(message)
-        if move_days > 0 and not any(neg_word in message.lower() for neg_word in ['no', 'לא', 'only', 'just', 'רק']):
-            logger.info(f"Lead {lead['id']} provided move-in date without clear deposit answer - assuming yes to deposit")
-            # Assume deposit is yes and process move-in date
-            db_service.update_lead(lead['id'], {
-                'stage': 'gate_question_move_date',
-                'can_pay_deposit': True
-            })
-            updated_lead = db_service.get_lead_by_phone(lead['phone_number'])
-            return self._handle_move_date_with_ai(updated_lead, message, conversation_history)
-        
-        response_type = self._analyze_yes_no_response(message, context='deposit')
-        
-        if response_type == 'no':
-            # Failed gate question
-            db_service.update_lead(lead['id'], {
-                'stage': 'gate_failed',
-                'can_pay_deposit': False
-            })
-            return gemini_service.generate_stage_response('gate_failed', lead, conversation_history, message)
-            
-        elif response_type == 'yes':
-            # Passed second gate, move to move-in date question
-            db_service.update_lead(lead['id'], {
-                'stage': 'gate_question_move_date',
-                'can_pay_deposit': True
-            })
-            updated_lead = db_service.get_lead_by_phone(lead['phone_number'])
-            return gemini_service.generate_stage_response('gate_question_move_date', updated_lead, conversation_history, message)
-            
-        else:
-            # Unclear response, stay in same stage
-            return gemini_service.generate_stage_response('gate_question_deposit', lead, conversation_history, message)
-    
-    def _handle_move_date_with_ai(self, lead: Dict, message: str, conversation_history: List[Dict]) -> str:
-        """Handle move-in date response with AI and business logic"""
-        logger.info(f"Handling move-in date response for lead {lead['id']} with AI")
-        
-        # Extract move-in timeframe
-        days_until_move = self._extract_move_in_days(message)
-        max_days = current_app.config.get('MAX_MOVE_IN_DAYS', 60)
-        
-        if days_until_move > max_days:
-            # Future move-in date
-            db_service.update_lead(lead['id'], {
-                'stage': 'future_fit',
-                'move_in_date': message.strip()
-            })
-            updated_lead = db_service.get_lead_by_phone(lead['phone_number'])
-            return gemini_service.generate_stage_response('future_fit', updated_lead, conversation_history, message)
-            
-        else:
-            # Good move-in timeframe, start profile collection
-            db_service.update_lead(lead['id'], {
-                'stage': 'collecting_profile',
-                'move_in_date': message.strip()
-            })
-            updated_lead = db_service.get_lead_by_phone(lead['phone_number'])
-            return gemini_service.generate_stage_response('collecting_profile', updated_lead, conversation_history, message)
-    
-    def _handle_profile_collection_with_ai(self, lead: Dict, message: str, conversation_history: List[Dict]) -> str:
-        """Handle profile collection with AI and field updates - improved to extract all available info"""
+    def _handle_profile_collection_with_ai(self, lead: Dict, message: str, conversation_history: List[Dict], intent_analysis: Dict = None) -> str:
+        """Handle profile collection with AI intent understanding"""
         logger.info(f"Collecting profile info for lead {lead['id']} with AI")
-        
-        # Skip frustration detection for now - let normal data extraction handle the flow
         
         # Check what profile information is missing
         missing_info = self._get_missing_profile_info(lead)
@@ -500,36 +541,11 @@ class LeadService:
             # Profile is complete, search for properties
             return self._complete_profile_and_search_with_ai(lead, conversation_history)
         
-        # Try to extract ALL profile information from current message and conversation history
-        all_updates = self._extract_all_profile_data(message, conversation_history, missing_info)
-        
-        if all_updates:
-            # Update the lead with all extracted information
-            db_service.update_lead(lead['id'], all_updates)
-            logger.info(f"Updated lead {lead['id']} profile fields: {all_updates}")
-            
-            # Refresh lead data
-            updated_lead = db_service.get_lead_by_phone(lead['phone_number'])
-            
-            # Check if profile is now complete
-            missing_after_update = self._get_missing_profile_info(updated_lead)
-            if not missing_after_update:
-                return self._complete_profile_and_search_with_ai(updated_lead, conversation_history)
-        
-        # If we still need info, but didn't extract anything meaningful, 
-        # try the old single-field approach as fallback
-        field_to_update = missing_info[0]
-        single_update = self._extract_profile_data_from_message(field_to_update, message)
-        
-        if single_update and not all_updates:
-            db_service.update_lead(lead['id'], single_update)
-            logger.info(f"Updated lead {lead['id']} profile field '{field_to_update}': {single_update}")
-            
-            # Refresh and check again
-            updated_lead = db_service.get_lead_by_phone(lead['phone_number'])
-            missing_after_update = self._get_missing_profile_info(updated_lead)
-            if not missing_after_update:
-                return self._complete_profile_and_search_with_ai(updated_lead, conversation_history)
+        # If AI needs clarification, ask for it
+        if intent_analysis and intent_analysis.get('needs_clarification'):
+            clarification_question = intent_analysis.get('clarification_question')
+            if clarification_question:
+                return clarification_question
         
         # Get updated lead data for AI context
         current_lead = db_service.get_lead_by_phone(lead['phone_number'])
@@ -777,10 +793,16 @@ class LeadService:
         A real human agent only restarts when it makes sense contextually.
         """
         message_lower = message.lower().strip()
-        
-        # Never restart if we're in initial stages or completed stages
         current_stage = lead.get('stage', 'new')
-        if current_stage in ['new', 'qualified', 'tour_scheduled']:
+        
+        # NEVER restart during active conversation stages
+        if current_stage in ['new', 'gate_question_payslips', 'gate_question_deposit', 
+                           'gate_question_move_date', 'collecting_profile', 'qualified', 
+                           'scheduling_in_progress', 'tour_scheduled']:
+            return False
+        
+        # Only restart for failed/ended stages and only with very specific conditions
+        if current_stage not in ['gate_failed', 'no_fit', 'future_fit']:
             return False
         
         # Check if this is a pure greeting message (not mixed with other content)
@@ -792,10 +814,9 @@ class LeadService:
         is_pure_greeting = any(re.match(pattern, message_lower, re.IGNORECASE) for pattern in greeting_only_patterns)
         
         if not is_pure_greeting:
-            # If message contains other content besides greeting, don't restart
             return False
         
-        # Check conversation timing - only restart if it's been a while
+        # Check conversation timing - only restart if it's been a LONG while (2+ hours)
         from datetime import datetime, timedelta
         now = datetime.now()
         last_interaction = lead.get('last_interaction')
@@ -808,15 +829,15 @@ class LeadService:
                 else:
                     last_time = last_interaction
                 
-                # Only restart if it's been more than 30 minutes
+                # Only restart if it's been more than 2 hours
                 time_diff = now - last_time.replace(tzinfo=None)
-                if time_diff.total_seconds() < 1800:  # 30 minutes
+                if time_diff.total_seconds() < 7200:  # 2 hours
                     return False
             except:
                 # If we can't parse time, err on the side of not restarting
                 return False
         
-        # Only restart for pure greetings after a long break
+        # Only restart for pure greetings after a very long break in failed stages
         return True
     
     def _analyze_yes_no_response(self, message: str, context: str = None) -> str:
@@ -1026,11 +1047,13 @@ Response format: Only return the number of days as an integer, nothing else.
                 ]):
                     continue  # Skip this message
                 
-                # Look for area-related responses
+                # Look for project-related responses
                 if any(phrase in msg_lower for phrase in [
-                    'tel aviv', 'תל אביב', 'anywhere', 'any area', 'any place', 'כל מקום', 
-                    'לא משנה', 'לא אכפת', 'open to', 'flexible', 'center', 'מרכז',
-                    'north', 'south', 'צפון', 'דרום', 'near', 'close to', 'קרוב'
+                    'sderot yerushalayim', 'sderot', 'yerushalayim', 'סמטת ירושלים',
+                    'neve sharet', 'neve', 'sharet', 'נווה שרת',
+                    'afar house', 'afar', 'house', 'אפר האוס',
+                    'anywhere', 'any project', 'any place', 'כל מקום', 
+                    'לא משנה', 'לא אכפת', 'open to', 'flexible'
                 ]) or (len(msg.split()) <= 3 and not any(char.isdigit() for char in msg)):  # Short non-numeric responses
                     area = msg.strip()
                     if len(area) > 1:
@@ -1070,15 +1093,17 @@ Response format: Only return the number of days as an integer, nothing else.
             ]):
                 return updates  # Don't extract area from obvious frustration
             
-            # Only extract if it contains location-related keywords or is short location name
+            # Only extract if it contains project-related keywords or is short project name
             area = message.strip()
             if area and len(area) > 1:
-                # Check if it looks like a real area preference
+                # Check if it looks like a real project preference
                 if any(keyword in message_lower for keyword in [
-                    'tel aviv', 'תל אביב', 'anywhere', 'any area', 'any place', 'כל מקום',
-                    'לא משנה', 'לא אכפת', 'open to', 'flexible', 'center', 'מרכז',
-                    'north', 'south', 'צפון', 'דרום', 'near', 'close to', 'קרוב'
-                ]) or len(area.split()) <= 3:  # Short responses likely to be area names
+                    'sderot yerushalayim', 'sderot', 'yerushalayim', 'סמטת ירושלים',
+                    'neve sharet', 'neve', 'sharet', 'נווה שרת',
+                    'afar house', 'afar', 'house', 'אפר האוס',
+                    'anywhere', 'any project', 'any place', 'כל מקום',
+                    'לא משנה', 'לא אכפת', 'open to', 'flexible'
+                ]) or len(area.split()) <= 3:  # Short responses likely to be project names
                     updates['preferred_area'] = area
         
         return updates

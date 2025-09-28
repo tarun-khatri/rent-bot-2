@@ -299,10 +299,21 @@ class GeminiService:
             if lead_data.get('rooms'): already_have.append("כמה חדרים")
             if lead_data.get('budget'): already_have.append("תקציב")
             if lead_data.get('has_parking') is not None: already_have.append("חניה")
-            if lead_data.get('preferred_area'): already_have.append("אזור")
+            if lead_data.get('preferred_area'): already_have.append("פרויקט")
             
             if already_have:
                 base_prompt += f"\n🚫 אל תשאל שוב על: {', '.join(already_have)}\n"
+            
+            # Add specific guidance for project selection
+            if not lead_data.get('preferred_area'):
+                base_prompt += f"""
+🏢 כשתשאל על פרויקט, תציע רק את 3 הפרויקטים שלנו:
+- Sderot Yerushalayim
+- Neve Sharet  
+- Afar House
+
+תשאל: "איזה פרויקט מעניין אותך? יש לנו 3 פרויקטים: Sderot Yerushalayim, Neve Sharet, או Afar House?"
+"""
         
         # Context awareness without overly sensitive frustration detection
         # Let the AI naturally understand the conversation flow
@@ -362,7 +373,29 @@ class GeminiService:
         elif lead_data.get('has_parking') is False:
             context_parts.append("לא צריך חניה")
         if lead_data.get('preferred_area'):
-            context_parts.append(f"אזור מועדף: {lead_data.get('preferred_area')}")
+            context_parts.append(f"פרויקט מועדף: {lead_data.get('preferred_area')}")
+        
+        # Additional preferences
+        if lead_data.get('preferred_floor_min') or lead_data.get('preferred_floor_max'):
+            floor_range = []
+            if lead_data.get('preferred_floor_min'):
+                floor_range.append(f"מ-{lead_data.get('preferred_floor_min')}")
+            if lead_data.get('preferred_floor_max'):
+                floor_range.append(f"עד-{lead_data.get('preferred_floor_max')}")
+            context_parts.append(f"קומה: {' '.join(floor_range)}")
+        
+        if lead_data.get('needs_furnished') is True:
+            context_parts.append("צריך ריהוט")
+        elif lead_data.get('needs_furnished') is False:
+            context_parts.append("לא צריך ריהוט")
+            
+        if lead_data.get('pet_owner') is True:
+            context_parts.append("בעל חיית מחמד")
+        elif lead_data.get('pet_owner') is False:
+            context_parts.append("לא בעל חיית מחמד")
+            
+        if lead_data.get('email'):
+            context_parts.append(f"אימייל: {lead_data.get('email')}")
         
         return "\n".join([f"- {part}" for part in context_parts]) if context_parts else ""
     
@@ -372,7 +405,7 @@ class GeminiService:
         if not lead_data.get('rooms'): missing.append("כמה חדרים")
         if not lead_data.get('budget'): missing.append("תקציב")
         if lead_data.get('has_parking') is None: missing.append("חניה")
-        if not lead_data.get('preferred_area'): missing.append("אזור מועדף")
+        if not lead_data.get('preferred_area'): missing.append("פרויקט מועדף")
         return missing if missing else ["הכל יש!"]
 
     def _get_human_business_guidance(self, stage: str, lead_data: Dict) -> str:
@@ -407,10 +440,11 @@ class GeminiService:
             'collecting_profile': f"""
 🎯 אתה אוסף פרטים כדי למצוא לו דירה מושלמת
 מה שחסר לדעת: {', '.join(self._get_missing_profile_fields_human(lead_data))}
-- תשאל רק על דבר אחד בכל פעם בסדר הנכון: חדרים → תקציב → חניה → אזור
+- תשאל רק על דבר אחד בכל פעם בסדר הנכון: חדרים → תקציב → חניה → פרויקט
 - תהיה סקרן ומעוניין באמת
 - 🚨 חובה לשאול על תקציב בצורה ברורה: "מה התקציב החודשי שלך?" או "כמה אתה יכול להרשות לעצמך?"
 - אל תשער תקציב מההודעות הקודמות - תמיד תשאל ישירות!
+- 🏢 כשתשאל על פרויקט, תציע רק את 3 הפרויקטים שלנו: Sderot Yerushalayim, Neve Sharet, Afar House
 - אם נראה שיש לך מספיק מידע - תתרגש ותגיד "בוא אראה לך דירות!"
 - אם יש לך הכל - תתרגש ותגיד שתחפש לו דירות!""",
             
@@ -452,7 +486,14 @@ class GeminiService:
 🎯 לא מצאת לו דירות מתאימות
 - תהיה כנה אבל עדיין מלא תקווה
 - תציע אלטרנטיבות (תקציב/חדרים/אזור)
-- תשאל אם הוא גמיש באיזשהו קריטריון"""
+- תשאל אם הוא גמיש באיזשהו קריטריון""",
+
+            'frustration': """
+🎯 הלקוח מתוסכל או מתלונן
+- תהיה אמפתי ומבין
+- תכיר בבעיה שלו
+- תציע פתרונות או עזרה
+- אל תהיה הגנתי - תהיה תומך"""
         }
         
         return guidance_map.get(stage, f"🎯 שלב {stage} - תענה בצורה טבעית ועוזרת")
@@ -467,7 +508,7 @@ class GeminiService:
         if lead_data.get('has_parking') is None:
             missing.append("חניה")
         if not lead_data.get('preferred_area'):
-            missing.append("אזור מועדף")
+            missing.append("פרויקט מועדף")
         return missing
     
     def _format_for_whatsapp(self, response: str) -> str:
@@ -517,7 +558,7 @@ class GeminiService:
 - {lead_data.get('rooms')} חדרים
 - תקציב עד {lead_data.get('budget'):,.0f} ש\"ח
 - {'עם חניה' if lead_data.get('has_parking') else 'בלי חניה'}
-- באזור: {lead_data.get('preferred_area', 'בכל תל אביב')}
+- בפרויקט: {lead_data.get('preferred_area', 'לא נבחר פרויקט')}
 
 🏠 והנה מה שמצאת בשבילו:"""
         
@@ -577,6 +618,116 @@ class GeminiService:
         
         return prompt
     
+    def analyze_user_intent(self, message: str, context: str, lead_data: Dict) -> Dict:
+        """
+        Use AI to analyze user intent and extract information naturally
+        Returns structured data about what the user is saying
+        """
+        try:
+            self._ensure_initialized()
+            
+            prompt = f"""אתה ליאור, סוכן נדל"ן, ואתה צריך להבין מה הלקוח אומר לך.
+
+הקשר הנוכחי: {context}
+הודעה של הלקוח: "{message}"
+
+מה שאתה יודע עליו עד עכשיו:
+- שם: {lead_data.get('name', 'לא ידוע')}
+- אימייל: {lead_data.get('email', 'לא נמסר')}
+- שלב: {lead_data.get('stage', 'new')}
+- תלושי שכר: {lead_data.get('has_payslips', 'לא נבדק')}
+- ערבות: {lead_data.get('can_pay_deposit', 'לא נבדק')}
+- מועד כניסה: {lead_data.get('move_in_date', 'לא נקבע')}
+- חדרים: {lead_data.get('rooms', 'לא נקבע')}
+- תקציב: {lead_data.get('budget', 'לא נקבע')}
+- חניה: {lead_data.get('has_parking', 'לא נבדק')}
+- פרויקט מועדף: {lead_data.get('preferred_area', 'לא נבחר')}
+- קומה מינימלית: {lead_data.get('preferred_floor_min', 'לא נקבע')}
+- קומה מקסימלית: {lead_data.get('preferred_floor_max', 'לא נקבע')}
+- צריך ריהוט: {lead_data.get('needs_furnished', 'לא נבדק')}
+- בעל חיית מחמד: {lead_data.get('pet_owner', 'לא נבדק')}
+
+תנתח את ההודעה ותחזיר JSON עם המידע הבא:
+
+{{
+    "intent": "answer_question|ask_question|provide_info|greeting|frustration|scheduling_request|property_request|other",
+    "extracted_data": {{
+        "has_payslips": true/false/null,
+        "can_pay_deposit": true/false/null,
+        "move_in_date": "תאריך או null",
+        "rooms": מספר או null,
+        "budget": מספר או null,
+        "has_parking": true/false/null,
+        "preferred_project": "שם פרויקט או null",
+        "preferred_floor_min": מספר או null,
+        "preferred_floor_max": מספר או null,
+        "needs_furnished": true/false/null,
+        "pet_owner": true/false/null,
+        "email": "כתובת אימייל או null"
+    }},
+    "confidence": 0.0-1.0,
+    "needs_clarification": true/false,
+    "clarification_question": "שאלה להבהרה או null"
+}}
+
+חשוב:
+- אם הוא עונה על שאלה - תזהה את התשובה ותחלץ את המידע
+- אם הוא שואל שאלה - תזהה את זה
+- אם הוא נותן מידע - תחלץ את המידע החדש
+- אם הוא מתלונן או מתוסכל - תזהה את זה
+- אם הוא רוצה לתאם פגישה - תזהה את זה
+- אם הוא רוצה לראות דירות - תזהה את זה
+- תמיד תחזיר JSON תקין בלבד!"""
+
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=prompt
+            )
+            
+            # Extract JSON from response
+            import json
+            import re
+            
+            response_text = ""
+            if hasattr(response, 'text') and response.text:
+                response_text = response.text.strip()
+            elif hasattr(response, 'candidates') and response.candidates:
+                for candidate in response.candidates:
+                    if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
+                        for part in candidate.content.parts:
+                            if hasattr(part, 'text') and part.text:
+                                response_text += part.text
+            
+            # Clean and extract JSON
+            json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(0)
+                try:
+                    result = json.loads(json_str)
+                    logger.info(f"AI intent analysis completed: {result.get('intent')}")
+                    return result
+                except json.JSONDecodeError:
+                    logger.error(f"Failed to parse AI intent JSON: {json_str}")
+            
+            # Fallback if AI doesn't return valid JSON
+            return {
+                "intent": "other",
+                "extracted_data": {},
+                "confidence": 0.5,
+                "needs_clarification": True,
+                "clarification_question": "לא הבנתי, תוכל להבהיר?"
+            }
+            
+        except Exception as e:
+            logger.error(f"Error analyzing user intent: {e}")
+            return {
+                "intent": "other",
+                "extracted_data": {},
+                "confidence": 0.0,
+                "needs_clarification": True,
+                "clarification_question": "מצטער, יש לי בעיה טכנית. תוכל לחזור על זה?"
+            }
+
     def generate_raw_response(self, prompt: str) -> str:
         """Generate raw AI response without any stage-specific formatting"""
         try:
