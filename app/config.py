@@ -26,7 +26,7 @@ def load_configurations(app):
     
     # Gemini AI Configuration
     app.config["GEMINI_API_KEY"] = os.getenv("GEMINI_API_KEY")
-    app.config["GEMINI_MODEL"] = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    app.config["GEMINI_MODEL"] = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
     
     # Calendly Configuration
     app.config["CALENDLY_ACCESS_TOKEN"] = os.getenv("CALENDLY_ACCESS_TOKEN")

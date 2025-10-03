@@ -3,7 +3,7 @@ from flask import current_app, jsonify
 import json
 import requests
 import re
-from app.services.lead_service import lead_service
+from app.services.lead_service_simple import lead_service_simple
 
 logger = logging.getLogger(__name__)
 
@@ -127,8 +127,8 @@ def process_whatsapp_message(body):
         
         logger.info(f"Message from {name} ({wa_id}): {message_body[:100]}...")
         
-        # Process through lead service
-        response = lead_service.process_lead_message(wa_id, name, message_body)
+        # Process through simplified lead service
+        response = lead_service_simple.process_lead_message(wa_id, name, message_body)
         
         if not response:
             logger.error("Lead service returned empty response")

@@ -142,6 +142,17 @@ class DatabaseService:
     # PROPERTY AND UNIT OPERATIONS
     # ==========================================
     
+    def get_all_properties(self) -> List[Dict]:
+        """Get all properties from database"""
+        try:
+            logger.info("Fetching all properties")
+            response = self.client.table('properties').select('*').execute()
+            logger.info(f"Found {len(response.data)} properties")
+            return response.data
+        except Exception as e:
+            logger.error(f"Error fetching properties: {e}")
+            return []
+    
     def get_available_units(self, filters: Optional[Dict] = None) -> List[Dict]:
         """Get available units with optional filters"""
         try:
