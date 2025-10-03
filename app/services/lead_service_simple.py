@@ -144,7 +144,11 @@ class LeadServiceSimple:
         logger.info(f"Handling qualified lead {lead['id']}")
         
         # Check if they want to schedule
-        if self._is_scheduling_request(message):
+        is_scheduling = self._is_scheduling_request(message)
+        logger.info(f"Scheduling request detection for '{message}': {is_scheduling}")
+        
+        if is_scheduling:
+            logger.info(f"Calling _start_scheduling for lead {lead['id']}")
             return self._start_scheduling(lead, conversation_history)
         
         # Check if they're asking about guarantees
@@ -246,10 +250,14 @@ class LeadServiceSimple:
         
         # Then send calendly link
         calendly_link = os.getenv('CALENDLY_LINK', '')
+        logger.info(f"CALENDLY_LINK environment variable: {'SET' if calendly_link else 'NOT SET'}")
+        
         if calendly_link:
+            logger.info(f"Using Calendly link: {calendly_link}")
             db_service.update_lead(lead['id'], {'stage': 'scheduling_in_progress'})
             return f"{guarantee_msg}\n\n📅 קישור לתיאום:\n{calendly_link}\n\nאחרי שתקבע, תאשר לי כאן."
         else:
+            logger.info("No Calendly link found, using manual scheduling")
             return "אתאם איתך ידנית. איזה יום ושעה נוחים לך?"
     
     def _get_available_properties(self) -> List[Dict]:
