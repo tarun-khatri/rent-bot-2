@@ -127,16 +127,22 @@ class LeadServiceSimple:
             # Profile complete - search for properties
             return self._search_and_show_properties(lead, conversation_history)
         
-        # If asking for project, pass available projects to AI
-        if 'project' in missing:
+        # Generate intelligent response based on what's missing
+        if 'name' in missing:
+            return "מה השם שלך?"
+        elif 'project' in missing:
             properties = self._get_available_properties()
             property_names = [p.get('name', '') for p in properties if p.get('name')]
-            # Add property names to lead data for AI context
-            lead_with_properties = lead.copy()
-            lead_with_properties['available_properties'] = property_names
-            return gemini_service_simple.generate_response('collecting_profile', lead_with_properties, conversation_history, message)
+            if len(property_names) == 1:
+                return f"האם אתה מתעניין בפרויקט {property_names[0]}?"
+            elif property_names:
+                return f"באיזה פרויקט אתה מתעניין? {', '.join(property_names)}"
+            else:
+                return "באיזה פרויקט אתה מתעניין?"
+        elif 'rooms' in missing:
+            return "כמה חדרים אתה מחפש?"
         
-        # Generate response asking for missing info
+        # Fallback
         return gemini_service_simple.generate_response('collecting_profile', lead, conversation_history, message)
     
     def _handle_qualified(self, lead: Dict, message: str, conversation_history: List[Dict]) -> str:
@@ -292,19 +298,28 @@ class LeadServiceSimple:
                 logger.info(f"Directly matched '{user_message}' to property: {prop_name}")
                 return prop_name
         
-        # If no direct match, use AI
+        # If no direct match, use AI with proper prompt
         try:
             from app.services.gemini_service_simple import gemini_service_simple
             
-            prompt = f"""Match the user's message to a property name.
+            prompt = f"""You are a property matching assistant. Match the user's message to one of the available property names.
 
-User said: "{user_message}"
+User message: "{user_message}"
 
 Available properties:
 {chr(10).join(f"- {name}" for name in property_names)}
 
-Reply with ONLY the exact property name that best matches, or "NONE" if no match.
-Example replies: "{property_names[0]}" or "NONE"
+Instructions:
+- Look for semantic matches (e.g., "Jerusalem Boulevard" matches "Sderot Yerushalayim")
+- Look for partial matches (e.g., "Jerusalem" matches "Sderot Yerushalayim")
+- Look for language variations (Hebrew/English)
+- Reply with ONLY the exact property name from the list above
+- If no match, reply with "NONE"
+
+Example:
+User: "Jerusalem Boulevard" → Reply: "Sderot Yerushalayim"
+User: "Luxury building" → Reply: "בניין יוקרה בתל אביב"
+User: "random text" → Reply: "NONE"
 """
             
             response = gemini_service_simple.generate_response('collecting_profile', {}, [], prompt)
@@ -318,15 +333,16 @@ Example replies: "{property_names[0]}" or "NONE"
                 return matched_property
             elif matched_property.upper() != "NONE":
                 logger.warning(f"AI returned invalid property: {matched_property}, trying fuzzy match")
-                # Try fuzzy matching
+                # Try fuzzy matching as fallback
                 for prop_name in property_names:
-                    if matched_property.lower() in prop_name.lower():
+                    if matched_property.lower() in prop_name.lower() or prop_name.lower() in matched_property.lower():
                         logger.info(f"Fuzzy matched to: {prop_name}")
                         return prop_name
             
         except Exception as e:
             logger.error(f"Error matching property with AI: {e}")
         
+        logger.info(f"No property match found for '{user_message}'")
         return None
     
     def _extract_profile_info(self, message: str, lead: Dict) -> Dict:
@@ -337,20 +353,32 @@ Example replies: "{property_names[0]}" or "NONE"
         # Extract name (if not already set and looks like a name)
         if not lead.get('name') or lead.get('name') in ['Unknown', '...', None, '']:
             words = message.split()
-            if 1 <= len(words) <= 3 and not any(char.isdigit() for char in message) and '?' not in message:
+            # More intelligent name detection
+            if (1 <= len(words) <= 3 and 
+                not any(char.isdigit() for char in message) and 
+                '?' not in message and
+                not any(word.lower() in ['yes', 'no', 'כן', 'לא', 'ok', 'okay'] for word in words) and
+                len(message.strip()) > 1):
                 updates['name'] = message.strip()
                 logger.info(f"Extracted name: {message.strip()}")
         
         # Extract project using AI - match against actual database properties
         properties = self._get_available_properties()
-        matched_property = self._match_property_with_ai(message, properties)
+        property_names = [p.get('name', '') for p in properties if p.get('name')]
         
-        if matched_property:
-            updates['preferred_area'] = matched_property
-            if lead.get('preferred_area') and lead.get('preferred_area') != matched_property:
-                logger.info(f"Changed project from {lead.get('preferred_area')} to {matched_property}")
-            else:
-                logger.info(f"Extracted project: {matched_property}")
+        # Handle "yes" response when only one property available
+        if (len(property_names) == 1 and 
+            message.lower().strip() in ['yes', 'כן', 'ok', 'okay', 'yeah']):
+            updates['preferred_area'] = property_names[0]
+            logger.info(f"Extracted project from 'yes' response: {property_names[0]}")
+        else:
+            matched_property = self._match_property_with_ai(message, properties)
+            if matched_property:
+                updates['preferred_area'] = matched_property
+                if lead.get('preferred_area') and lead.get('preferred_area') != matched_property:
+                    logger.info(f"Changed project from {lead.get('preferred_area')} to {matched_property}")
+                else:
+                    logger.info(f"Extracted project: {matched_property}")
         
         # Extract number of rooms - allow updates anytime user mentions a number
         rooms = self._extract_number(message)
@@ -423,28 +451,21 @@ Example replies: "{property_names[0]}" or "NONE"
         return True
     
     def _is_scheduling_request(self, message: str) -> bool:
-        """Check if message is requesting to schedule using AI"""
-        try:
-            from app.services.gemini_service_simple import gemini_service_simple
+        """Check if message is requesting to schedule"""
+        message_lower = message.lower().strip()
+        
+        # Simple and reliable detection
+        scheduling_words = ['yes', 'כן', 'רוצה', 'want', 'schedule', 'visit', 'tour', 'ביקור', 'סיור', 'לתאם', 'לקבוע']
+        
+        # Check for exact matches
+        if message_lower in scheduling_words:
+            return True
             
-            # Use AI to understand if user wants to schedule
-            prompt = f"""Does this message indicate the user wants to schedule a visit/tour?
-
-User message: "{message}"
-
-Reply with ONLY "YES" or "NO"."""
+        # Check for partial matches
+        if any(word in message_lower for word in scheduling_words):
+            return True
             
-            response = gemini_service_simple.generate_response('collecting_profile', {}, [], prompt)
-            result = response.strip().upper()
-            
-            logger.info(f"AI scheduling detection for '{message}': {result}")
-            return result == "YES"
-            
-        except Exception as e:
-            logger.error(f"Error in AI scheduling detection: {e}")
-            # Fallback to simple detection
-            message_lower = message.lower()
-            return any(word in message_lower for word in ['yes', 'כן', 'רוצה', 'want', 'schedule', 'visit', 'tour'])
+        return False
     
     def _is_booking_confirmation(self, message: str) -> bool:
         """Check if message confirms booking"""
